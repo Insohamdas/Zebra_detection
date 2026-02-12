@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['Zebra']
+
+roboflow:
+  workspace: sushanth-raj
+  project: zebra-3cn5k
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/sushanth-raj/zebra-3cn5k/dataset/1

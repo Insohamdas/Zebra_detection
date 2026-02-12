@@ -1,0 +1,5 @@
+# Dataset configuration for YOLO/Ultralytics training
+train: datasets/train/images
+val: datasets/valid/images
+names:
+  0: zebra
