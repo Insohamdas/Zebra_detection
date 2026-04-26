@@ -42,6 +42,13 @@ class IdentificationResponse(BaseModel):
     is_new: bool
 
 
+class VideoIdentificationResponse(BaseModel):
+    """Response from video identification endpoint."""
+
+    unique_zebras: list[IdentificationResponse]
+    total_frames_processed: int
+
+
 def get_pipeline():
     """Get or initialize the identification pipeline.
     
@@ -99,15 +106,6 @@ def create_app() -> FastAPI:
         """Identify zebra from image.
         
         Full pipeline: image → encode → match → return ZebraID
-        
-        Args:
-            image: Image file (JPG or PNG)
-        
-        Returns:
-            IdentificationResponse with zebra_id, confidence, and is_new flag
-        
-        Raises:
-            HTTPException: If image processing fails
         """
         try:
             import torch
@@ -156,7 +154,6 @@ def create_app() -> FastAPI:
             flank = flank_classifier.classify(frame)
 
             # Match against registry
-            # Returns: (zebra_id, cosine_similarity, is_new)
             zebra_id, confidence, is_new = engine.match_with_confidence(
                 embedding_np, flank=flank, frame_id="api_upload", quality_score=qual_val, ref_image=contents
             )
@@ -170,6 +167,101 @@ def create_app() -> FastAPI:
         except Exception as e:
             LOGGER.exception("Identification failed")
             raise HTTPException(status_code=500, detail=str(e)) from e
+
+    @app.post("/process-video", tags=["identification"], response_model=VideoIdentificationResponse)
+    async def process_video(
+        video: Annotated[UploadFile, File(description="Video file (MP4, AVI, MOV)")],
+    ) -> VideoIdentificationResponse:
+        """Identify all unique zebras in a video file."""
+        import tempfile
+        import cv2
+        import torch
+        from zebraid.pipelines.real_identify import quality_score
+
+        # Save video to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video.filename)[1]) as tmp:
+            tmp.write(await video.read())
+            tmp_path = tmp.name
+
+        try:
+            cap = cv2.VideoCapture(tmp_path)
+            if not cap.isOpened():
+                raise HTTPException(status_code=400, detail="Could not open video file")
+
+            registry, engine, encoder, segmenter, flank_classifier, detector = get_pipeline()
+            
+            unique_ids = {}  # zebra_id -> IdentificationResponse
+            frame_count = 0
+            processed_count = 0
+            
+            # Sample every 15 frames (approx 0.5s for 30fps video)
+            sample_rate = 15
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                if frame_count % sample_rate == 0:
+                    processed_count += 1
+                    
+                    # 1. Detection
+                    if not detector.detect(frame):
+                        frame_count += 1
+                        continue
+                        
+                    # 2. Quality
+                    is_good, qual_val = quality_score(frame)
+                    if not is_good:
+                        frame_count += 1
+                        continue
+                        
+                    # 3. Processing
+                    frame_tensor = prepare_tensor(frame, segmenter=segmenter)
+                    
+                    with torch.no_grad():
+                        resnet_embedding = encoder.encode(frame_tensor)
+                        g_feats = gabor_features(frame)
+                        gabor_tensor = torch.from_numpy(g_feats).unsqueeze(0).to(resnet_embedding.device)
+                        embedding = combine_features(resnet_embedding, [gabor_tensor], alpha=0.7)
+                        
+                    embedding_np = embedding.squeeze().detach().cpu().numpy().astype(np.float32)
+                    flank = flank_classifier.classify(frame)
+                    
+                    # Convert frame to bytes for storage if new
+                    _, buffer = cv2.imencode('.jpg', frame)
+                    frame_bytes = buffer.tobytes()
+                    
+                    # Match
+                    zebra_id, confidence, is_new = engine.match_with_confidence(
+                        embedding_np, flank=flank, frame_id=f"video_{video.filename}_{frame_count}", 
+                        quality_score=qual_val, ref_image=frame_bytes
+                    )
+                    
+                    # Store unique ID results (keep the highest confidence one)
+                    if zebra_id not in unique_ids or confidence > unique_ids[zebra_id].confidence:
+                        unique_ids[zebra_id] = IdentificationResponse(
+                            zebra_id=zebra_id, confidence=confidence, is_new=is_new
+                        )
+                
+                frame_count += 1
+                
+                # Limit processing to prevent timeouts (e.g., max 100 sampled frames)
+                if processed_count > 100:
+                    break
+
+            cap.release()
+            return VideoIdentificationResponse(
+                unique_zebras=list(unique_ids.values()),
+                total_frames_processed=processed_count
+            )
+
+        except Exception as e:
+            LOGGER.exception("Video processing failed")
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
     return app
 

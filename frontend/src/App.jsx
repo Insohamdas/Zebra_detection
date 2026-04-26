@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, CheckCircle2, AlertCircle, Fingerprint, RefreshCw } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertCircle, Fingerprint, RefreshCw, Video } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 function App() {
@@ -26,7 +26,7 @@ function App() {
     e.preventDefault();
     setIsDragging(false);
     const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile && droppedFile.type.startsWith('image/')) {
+    if (droppedFile && (droppedFile.type.startsWith('image/') || droppedFile.type.startsWith('video/'))) {
       handleFileSelection(droppedFile);
     }
   };
@@ -51,19 +51,22 @@ function App() {
     setLoading(true);
     setError(null);
 
+    const isVideo = file.type.startsWith('video/');
+    const endpoint = isVideo ? '/process-video' : '/identify';
+    const fieldName = isVideo ? 'video' : 'image';
+
     const formData = new FormData();
-    formData.append('image', file);
+    formData.append(fieldName, file);
 
     try {
-      // Assuming FastAPI runs on port 8000
-      const response = await fetch(`${API_URL}/identify`, {
+      const response = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
         const errData = await response.json();
-        throw new Error(errData.detail || 'Identification failed');
+        throw new Error(errData.detail || 'Processing failed');
       }
 
       const data = await response.json();
@@ -84,6 +87,8 @@ function App() {
       fileInputRef.current.value = '';
     }
   };
+
+  const isVideoFile = file?.type.startsWith('video/');
 
   return (
     <div className="app-wrapper">
@@ -109,7 +114,7 @@ function App() {
         >
           <h1 className="heading-xl text-gradient">Identify individuals with precision.</h1>
           <p className="hero-subtitle">
-            Upload an image of a zebra to instantly cross-reference our global FAISS registry and determine its unique identity.
+            Upload an image or video of a zebra to instantly cross-reference our global FAISS registry and determine unique identities.
           </p>
         </motion.div>
 
@@ -132,7 +137,7 @@ function App() {
               >
                 <input 
                   type="file" 
-                  accept="image/jpeg, image/png" 
+                  accept="image/jpeg, image/png, video/mp4, video/x-m4v, video/*" 
                   style={{ display: 'none' }} 
                   ref={fileInputRef}
                   onChange={handleFileInput}
@@ -141,7 +146,7 @@ function App() {
                 {loading && (
                   <div className="loading-overlay">
                     <span className="loader"></span>
-                    <p className="dropzone-title">Analyzing biometric markers...</p>
+                    <p className="dropzone-title">{isVideoFile ? 'Scanning video frames...' : 'Analyzing biometric markers...'}</p>
                   </div>
                 )}
 
@@ -151,8 +156,8 @@ function App() {
                       <UploadCloud size={32} />
                     </div>
                     <div>
-                      <h3 className="dropzone-title">Drag & drop image here</h3>
-                      <p className="dropzone-subtitle">or click to browse from your computer</p>
+                      <h3 className="dropzone-title">Drag & drop media here</h3>
+                      <p className="dropzone-subtitle">supports images and videos</p>
                     </div>
                     <button className="btn-primary" onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>
                       Select File
@@ -162,8 +167,15 @@ function App() {
 
                 {!loading && file && (
                   <div className="dropzone-content">
-                    <div style={{ width: '200px', height: '200px', borderRadius: '1rem', overflow: 'hidden', boxShadow: 'var(--shadow-md)' }}>
-                      <img src={preview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <div style={{ width: '200px', height: '200px', borderRadius: '1rem', overflow: 'hidden', boxShadow: 'var(--shadow-md)', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      {isVideoFile ? (
+                        <div style={{ color: '#fff', textAlign: 'center' }}>
+                          <Video size={48} />
+                          <p style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>Video Clip</p>
+                        </div>
+                      ) : (
+                        <img src={preview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      )}
                     </div>
                     <h3 className="dropzone-title">{file.name}</h3>
                     <div style={{ display: 'flex', gap: '1rem' }}>
@@ -171,7 +183,7 @@ function App() {
                         Cancel
                       </button>
                       <button className="btn-primary" onClick={(e) => { e.stopPropagation(); handleUpload(); }}>
-                        Identify Zebra
+                        {isVideoFile ? 'Process Video' : 'Identify Zebra'}
                       </button>
                     </div>
                   </div>
@@ -186,33 +198,77 @@ function App() {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5, delay: 0.1 }}
             >
-              <div className="image-preview">
-                <img src={preview} alt="Analyzed Zebra" />
-              </div>
-              <div className="glass-card result-card">
-                <div className={`status-badge ${result.is_new ? 'status-new' : 'status-match'}`}>
-                  {result.is_new ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
-                  {result.is_new ? 'New Individual Discovered' : 'Match Found'}
-                </div>
-                
-                <h2 className="metric-label">Assigned Identity</h2>
-                <div className="id-display">{result.zebra_id}</div>
-                
-                <div className="metrics-grid">
-                  <div className="metric-item">
-                    <span className="metric-label">Confidence Score</span>
-                    <span className="metric-value">{(result.confidence * 100).toFixed(1)}%</span>
+              {result.unique_zebras ? (
+                // Video Result View
+                <div style={{ width: '100%' }}>
+                  <div className="glass-card" style={{ padding: '2rem', marginBottom: '2rem' }}>
+                    <div className="status-badge status-match" style={{ width: 'fit-content', marginBottom: '1rem' }}>
+                      <CheckCircle2 size={18} />
+                      Video Scan Complete
+                    </div>
+                    <h2 className="heading-xl" style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>
+                      {result.unique_zebras.length} Unique Zebras Found
+                    </h2>
+                    <p style={{ color: 'var(--text-muted)' }}>
+                      Processed {result.total_frames_processed} frames from the video.
+                    </p>
                   </div>
-                  <div className="metric-item">
-                    <span className="metric-label">Status</span>
-                    <span className="metric-value">{result.is_new ? 'Enrolled' : 'Verified'}</span>
-                  </div>
-                </div>
 
-                <button className="btn-reset" onClick={resetState}>
-                  <RefreshCw size={18} /> Process Another
-                </button>
-              </div>
+                  <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
+                    {result.unique_zebras.map((zebra, idx) => (
+                      <div key={idx} className="glass-card result-card" style={{ marginTop: 0 }}>
+                        <div className={`status-badge ${zebra.is_new ? 'status-new' : 'status-match'}`}>
+                          {zebra.is_new ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
+                          {zebra.is_new ? 'New Individual' : 'Existing Match'}
+                        </div>
+                        <h2 className="metric-label" style={{ marginTop: '1rem' }}>Identity</h2>
+                        <div className="id-display" style={{ fontSize: '1.2rem' }}>{zebra.zebra_id}</div>
+                        <div className="metric-item" style={{ marginTop: '1rem' }}>
+                          <span className="metric-label">Match Confidence</span>
+                          <span className="metric-value">{(zebra.confidence * 100).toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ textAlign: 'center', marginTop: '3rem' }}>
+                    <button className="btn-primary" onClick={resetState}>
+                      <RefreshCw size={18} /> Process Another Video
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                // Single Image Result View
+                <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <div className="image-preview">
+                    <img src={preview} alt="Analyzed Zebra" />
+                  </div>
+                  <div className="glass-card result-card">
+                    <div className={`status-badge ${result.is_new ? 'status-new' : 'status-match'}`}>
+                      {result.is_new ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
+                      {result.is_new ? 'New Individual Discovered' : 'Match Found'}
+                    </div>
+                    
+                    <h2 className="metric-label">Assigned Identity</h2>
+                    <div className="id-display">{result.zebra_id}</div>
+                    
+                    <div className="metrics-grid">
+                      <div className="metric-item">
+                        <span className="metric-label">Confidence Score</span>
+                        <span className="metric-value">{(result.confidence * 100).toFixed(1)}%</span>
+                      </div>
+                      <div className="metric-item">
+                        <span className="metric-label">Status</span>
+                        <span className="metric-value">{result.is_new ? 'Enrolled' : 'Verified'}</span>
+                      </div>
+                    </div>
+
+                    <button className="btn-reset" onClick={resetState}>
+                      <RefreshCw size={18} /> Process Another
+                    </button>
+                  </div>
+                </div>
+              )}
             </motion.div>
           ) : (
             <motion.div 
