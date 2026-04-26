@@ -26,6 +26,7 @@ tracking = ["deep-sort-realtime>=1.3.2"]
 
 [project.scripts]
 zebraid-api = "zebraid.api.app:main"
+app = "zebraid.api.app:app"
 zebraid-download-images = "zebraid.data.download:main"
 zebraid-test-video = "zebraid.pipelines.video_test:main"
 zebraid-evaluate = "zebraid.experiments.evaluate:main"
