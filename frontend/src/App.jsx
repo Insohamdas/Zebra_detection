@@ -1,5 +1,12 @@
-import React, { useState, useRef } from 'react';
-import { UploadCloud, CheckCircle2, AlertCircle, Fingerprint, RefreshCw, Video } from 'lucide-react';
+import { useState, useRef } from 'react';
+import { 
+  UploadCloud, 
+  AlertCircle, 
+  Fingerprint, 
+  RefreshCw, 
+  Video, 
+  Copy
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 function App() {
@@ -102,21 +109,29 @@ function App() {
             </div>
             <span>ZEBRAID</span>
           </a>
+          <div style={{ fontSize: '0.75rem', fontWeight: 600, opacity: 0.5, fontFamily: 'monospace' }}>V1.3.5.B</div>
         </div>
       </header>
 
       <main className="main-content container">
-        <motion.div 
-          className="hero"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-        >
-          <h1 className="heading-xl text-gradient">Identify individuals with precision.</h1>
-          <p className="hero-subtitle">
-            Upload an image or video of a zebra to instantly cross-reference our global FAISS registry and determine unique identities.
-          </p>
-        </motion.div>
+        {!result && !error && (
+          <section className="hero" style={{ position: 'relative' }}>
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.8 }}
+            >
+              <span className="project-tagline" style={{ color: 'var(--text-muted)', fontSize: '0.75rem', opacity: 0.8 }}>Software version V1.3.5.B</span>
+              <h1 className="heading-xl text-gradient">
+                Individual Recognition. <br />
+                Continental Scale.
+              </h1>
+              <p className="hero-subtitle">
+                A Stripe-Based Biometric Identification System for Individual Zebra Recognition at Continental Scale.
+              </p>
+            </motion.div>
+          </section>
+        )}
 
         <AnimatePresence mode="wait">
           {!result && !error ? (
@@ -146,7 +161,7 @@ function App() {
                 {loading && (
                   <div className="loading-overlay">
                     <span className="loader"></span>
-                    <p className="dropzone-title">{isVideoFile ? 'Scanning video frames...' : 'Analyzing biometric markers...'}</p>
+                    <p className="dropzone-title">{isVideoFile ? 'Analyzing Video Streams...' : 'Extracting Stripe Embeddings...'}</p>
                   </div>
                 )}
 
@@ -156,115 +171,137 @@ function App() {
                       <UploadCloud size={32} />
                     </div>
                     <div>
-                      <h3 className="dropzone-title">Drag & drop media here</h3>
-                      <p className="dropzone-subtitle">supports images and videos</p>
+                      <h3 className="dropzone-title">Identification Portal</h3>
+                      <p className="dropzone-subtitle">Drop your zebra images or video files here</p>
                     </div>
                     <button className="btn-primary" onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>
-                      Select File
+                      Choose Source File
                     </button>
                   </div>
                 )}
 
                 {!loading && file && (
                   <div className="dropzone-content">
-                    <div style={{ width: '200px', height: '200px', borderRadius: '1rem', overflow: 'hidden', boxShadow: 'var(--shadow-md)', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ width: '240px', height: '240px', borderRadius: 'var(--radius-xl)', overflow: 'hidden', boxShadow: 'var(--shadow-xl)', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                       {isVideoFile ? (
                         <div style={{ color: '#fff', textAlign: 'center' }}>
-                          <Video size={48} />
-                          <p style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>Video Clip</p>
+                          <Video size={64} strokeWidth={1.5} />
+                          <p style={{ fontSize: '0.9rem', marginTop: '1rem', opacity: 0.7 }}>{file.name}</p>
                         </div>
                       ) : (
                         <img src={preview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                       )}
                     </div>
-                    <h3 className="dropzone-title">{file.name}</h3>
                     <div style={{ display: 'flex', gap: '1rem' }}>
-                      <button className="btn-reset" onClick={(e) => { e.stopPropagation(); resetState(); }}>
-                        Cancel
+                      <button className="btn-reset" style={{ marginTop: 0 }} onClick={(e) => { e.stopPropagation(); resetState(); }}>
+                        Reset
                       </button>
                       <button className="btn-primary" onClick={(e) => { e.stopPropagation(); handleUpload(); }}>
-                        {isVideoFile ? 'Process Video' : 'Identify Zebra'}
+                        {isVideoFile ? 'Run Video Analysis' : 'Verify Identity'}
                       </button>
                     </div>
                   </div>
                 )}
               </div>
+
             </motion.div>
           ) : result ? (
             <motion.div 
               key="result"
-              className="results-container"
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.1 }}
+              className={result.unique_zebras ? 'results-container sequence-results-shell' : 'single-result-shell'}
+              initial={{ opacity: 0, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.5 }}
             >
               {result.unique_zebras ? (
-                // Video Result View
                 <div style={{ width: '100%' }}>
-                  <div className="glass-card" style={{ padding: '2rem', marginBottom: '2rem' }}>
-                    <div className="status-badge status-match" style={{ width: 'fit-content', marginBottom: '1rem' }}>
-                      <CheckCircle2 size={18} />
-                      Video Scan Complete
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '1.5rem' }}>
+                    <div>
+                      <h2 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em' }}>Sequence Results</h2>
+                      <p style={{ color: 'var(--text-muted)' }}>Verified {result.unique_zebras.length} individuals from {result.total_frames_processed} samples.</p>
                     </div>
-                    <h2 className="heading-xl" style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>
-                      {result.unique_zebras.length} Unique Zebras Found
-                    </h2>
-                    <p style={{ color: 'var(--text-muted)' }}>
-                      Processed {result.total_frames_processed} frames from the video.
-                    </p>
-                  </div>
-
-                  <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
-                    {result.unique_zebras.map((zebra, idx) => (
-                      <div key={idx} className="glass-card result-card" style={{ marginTop: 0 }}>
-                        <div className={`status-badge ${zebra.is_new ? 'status-new' : 'status-match'}`}>
-                          {zebra.is_new ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
-                          {zebra.is_new ? 'New Individual' : 'Existing Match'}
-                        </div>
-                        <h2 className="metric-label" style={{ marginTop: '1rem' }}>Identity</h2>
-                        <div className="id-display" style={{ fontSize: '1.2rem' }}>{zebra.zebra_id}</div>
-                        <div className="metric-item" style={{ marginTop: '1rem' }}>
-                          <span className="metric-label">Match Confidence</span>
-                          <span className="metric-value">{(zebra.confidence * 100).toFixed(1)}%</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div style={{ textAlign: 'center', marginTop: '3rem' }}>
                     <button className="btn-primary" onClick={resetState}>
-                      <RefreshCw size={18} /> Process Another Video
+                      <RefreshCw size={18} /> New Analysis
                     </button>
+                  </div>
+
+                  <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
+                    {result.unique_zebras.map((zebra, idx) => (
+                      <motion.div 
+                        key={idx} 
+                        style={{ background: 'white', borderRadius: '1.25rem', padding: '1.5rem', border: '1px solid var(--border)' }}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: idx * 0.05 }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                          <div style={{ background: zebra.is_new ? 'rgba(16, 185, 129, 0.1)' : 'rgba(37, 99, 235, 0.1)', color: zebra.is_new ? 'var(--success)' : 'var(--primary)', padding: '0.4rem 0.8rem', borderRadius: '8px', fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase' }}>
+                            {zebra.is_new ? 'New Profile' : 'Registry Match'}
+                          </div>
+                          <button 
+                            onClick={() => navigator.clipboard.writeText(zebra.zebra_id)}
+                            style={{ color: 'var(--primary)', background: 'rgba(37, 99, 235, 0.1)', padding: '0.5rem', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s ease', border: '1px solid transparent' }}
+                            onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--primary)'}
+                            onMouseOut={(e) => e.currentTarget.style.borderColor = 'transparent'}
+                            title="Copy ID"
+                          >
+                            <Copy size={16} />
+                          </button>
+                        </div>
+                        <div style={{ fontSize: '1.1rem', fontWeight: 800, fontFamily: 'monospace', marginBottom: '1.25rem' }}>{zebra.zebra_id}</div>
+                        <div style={{ display: 'flex', gap: '1.5rem' }}>
+                          <div>
+                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600 }}>CONFIDENCE</div>
+                            <div style={{ fontSize: '1rem', fontWeight: 700 }}>{(zebra.confidence * 100).toFixed(1)}%</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600 }}>STATUS</div>
+                            <div style={{ fontSize: '1rem', fontWeight: 700 }}>{zebra.is_new ? 'ENROLLED' : 'SYNCED'}</div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    ))}
                   </div>
                 </div>
               ) : (
-                // Single Image Result View
-                <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', justifyContent: 'center' }}>
-                  <div className="image-preview">
-                    <img src={preview} alt="Analyzed Zebra" />
+                <div className="single-result-card">
+                  <div className="single-result-preview">
+                    <img src={preview} alt="Input" />
                   </div>
-                  <div className="glass-card result-card">
-                    <div className={`status-badge ${result.is_new ? 'status-new' : 'status-match'}`}>
-                      {result.is_new ? <AlertCircle size={18} /> : <CheckCircle2 size={18} />}
-                      {result.is_new ? 'New Individual Discovered' : 'Match Found'}
+                  
+                  <div className="single-result-details">
+                    <div className="single-result-status">
+                      <span>
+                        {result.is_new ? 'New Registration' : 'Registry Match Confirmed'}
+                      </span>
+                    </div>
+
+                    <h2 className="single-result-label">BIOMETRIC ID</h2>
+                    <div className="single-result-id-row">
+                      <div className="single-result-id">{result.zebra_id}</div>
+                      <button 
+                        className="copy-id-button"
+                        onClick={() => navigator.clipboard.writeText(result.zebra_id)}
+                        title="Copy ID"
+                        aria-label="Copy biometric ID"
+                      >
+                        <Copy size={17} strokeWidth={2.2} />
+                      </button>
                     </div>
                     
-                    <h2 className="metric-label">Assigned Identity</h2>
-                    <div className="id-display">{result.zebra_id}</div>
-                    
-                    <div className="metrics-grid">
-                      <div className="metric-item">
-                        <span className="metric-label">Confidence Score</span>
-                        <span className="metric-value">{(result.confidence * 100).toFixed(1)}%</span>
+                    <div className="single-result-metrics">
+                      <div className="single-result-metric is-primary">
+                        <div className="single-result-metric-label">MATCH SCORE</div>
+                        <div className="single-result-metric-value">{(result.confidence * 100).toFixed(1)}%</div>
                       </div>
-                      <div className="metric-item">
-                        <span className="metric-label">Status</span>
-                        <span className="metric-value">{result.is_new ? 'Enrolled' : 'Verified'}</span>
+                      <div className="single-result-metric">
+                        <div className="single-result-metric-label">DATABASE</div>
+                        <div className="single-result-metric-value">{result.is_new ? 'ENROLLED' : 'VERIFIED'}</div>
                       </div>
                     </div>
 
-                    <button className="btn-reset" onClick={resetState}>
-                      <RefreshCw size={18} /> Process Another
+                    <button className="btn-primary single-result-action" onClick={resetState}>
+                      <RefreshCw size={20} /> Perform New Search
                     </button>
                   </div>
                 </div>
@@ -278,22 +315,41 @@ function App() {
               animate={{ opacity: 1 }}
               style={{ textAlign: 'center', maxWidth: '600px', margin: '0 auto' }}
             >
-              <AlertCircle size={48} color="var(--danger)" style={{ margin: '0 auto 1.5rem' }} />
-              <h2 className="heading-xl" style={{ fontSize: '2rem' }}>Analysis Failed</h2>
-              <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>
+              <AlertCircle size={64} color="var(--danger)" style={{ margin: '0 auto 1.5rem', opacity: 0.5 }} />
+              <h2 className="heading-xl" style={{ fontSize: '2.5rem' }}>Processing Aborted</h2>
+              <p style={{ color: 'var(--text-muted)', marginBottom: '2.5rem', fontSize: '1.1rem' }}>
                 {error === 'low_quality' 
-                  ? 'The image quality is too low for accurate identification. Please ensure the image is sharp and the subject is clearly visible.' 
+                  ? 'Input quality insufficient for biometric extraction. Please ensure the target is well-lit and in focus.' 
                   : error === 'no_zebra'
-                  ? 'No zebra was detected in this image. Please upload a clear picture of a zebra.'
+                  ? 'No target species detected in this capture. The system only processes individual zebra flanks.'
                   : error}
               </p>
               <button className="btn-primary" onClick={resetState}>
-                Try Again
+                Re-submit Data
               </button>
             </motion.div>
           )}
         </AnimatePresence>
       </main>
+
+      <footer className="new-age-footer">
+        <div className="container">
+          <div className="footer-inner">
+            <div className="footer-left">
+              <div className="footer-logo-minimal">
+                <Fingerprint size={20} />
+                <span>ZEBRAID</span>
+              </div>
+              <span className="footer-divider"></span>
+              <span className="footer-version-tag">SYSTEM V1.3.5.B</span>
+            </div>
+            
+            <div className="footer-right">
+              <p style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>© 2026 ZEBRAID. All Rights Reserved.</p>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
