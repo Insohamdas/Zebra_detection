@@ -24,6 +24,7 @@ class MatchingEngine:
         self,
         registry: FaissStore,
         similarity_threshold: float = 0.75,
+        drift_hamming_threshold: float = 0.35,
     ):
         """Initialize matching engine with a registry store.
         
@@ -33,6 +34,7 @@ class MatchingEngine:
         """
         self.registry = registry
         self.similarity_threshold = similarity_threshold
+        self.drift_hamming_threshold = drift_hamming_threshold
     
     def match(self, embedding: np.ndarray, flank: str = "left") -> str:
         """Attempt to match an embedding to an existing zebra ID.
@@ -67,7 +69,10 @@ class MatchingEngine:
         self, 
         embedding: np.ndarray, 
         flank: str = "left",
-        ref_image: bytes | None = None
+        ref_image: bytes | None = None,
+        global_code: np.ndarray | None = None,
+        local_codes: dict[str, np.ndarray] | None = None,
+        ssi_profile: np.ndarray | None = None,
     ) -> str:
         """Create a new zebra ID by adding to registry with flank label.
         
@@ -80,7 +85,14 @@ class MatchingEngine:
             Registry-assigned zebra ID
         """
         # Let registry assign the ID when adding embedding
-        new_id = self.registry.add_and_get_id(embedding, flank=flank, ref_image=ref_image)
+        new_id = self.registry.add_and_get_id(
+            embedding,
+            flank=flank,
+            ref_image=ref_image,
+            global_code=global_code,
+            local_codes=local_codes,
+            ssi_profile=ssi_profile,
+        )
         
         return new_id
     
@@ -90,7 +102,10 @@ class MatchingEngine:
         flank: str = "left",
         frame_id: str | None = None,
         quality_score: float | None = None,
-        ref_image: bytes | None = None
+        ref_image: bytes | None = None,
+        global_code: np.ndarray | None = None,
+        local_codes: dict[str, np.ndarray] | None = None,
+        ssi_profile: np.ndarray | None = None,
     ) -> tuple[str, float, bool]:
         """Match embedding and return ID, confidence, and match status.
         
@@ -112,10 +127,18 @@ class MatchingEngine:
         """
         # If flank index is empty, create new ID
         if self.registry.indices[flank].ntotal == 0:
-            zebra_id = self._create_new_id(embedding, flank=flank, ref_image=ref_image)
+            zebra_id = self._create_new_id(
+                embedding,
+                flank=flank,
+                ref_image=ref_image,
+                global_code=global_code,
+                local_codes=local_codes,
+                ssi_profile=ssi_profile,
+            )
             confidence = 1.0
             is_new = True
             cosine_sim = 1.0
+            drift_flag = False
         else:
             # With IndexFlatIP, distance = cosine similarity (higher = more similar)
             zebra_id, cosine_sim = self.registry.search(embedding, flank=flank)
@@ -124,11 +147,26 @@ class MatchingEngine:
             confidence = float(np.clip((cosine_sim + 1.0) / 2.0, 0.0, 1.0))
             
             if cosine_sim > self.similarity_threshold:
-                self.registry.update_embedding(zebra_id, embedding, flank=flank, alpha=0.1)
+                drift_flag = self.registry.update_embedding(
+                    zebra_id,
+                    embedding,
+                    flank=flank,
+                    alpha=0.1,
+                    global_code=global_code,
+                    drift_threshold=self.drift_hamming_threshold,
+                )
                 is_new = False
             else:
-                zebra_id = self._create_new_id(embedding, flank=flank, ref_image=ref_image)
+                zebra_id = self._create_new_id(
+                    embedding,
+                    flank=flank,
+                    ref_image=ref_image,
+                    global_code=global_code,
+                    local_codes=local_codes,
+                    ssi_profile=ssi_profile,
+                )
                 is_new = True
+                drift_flag = False
                 
         decision = {
             "ts": time.time(),
@@ -138,11 +176,52 @@ class MatchingEngine:
             "confidence": round(float(confidence), 4),
             "is_new": is_new,
             "quality": round(float(quality_score), 3) if quality_score is not None else None,
-            "flank": flank
+            "flank": flank,
+            "drift_flag": drift_flag,
         }
         log.info(json.dumps(decision))
 
         return zebra_id, confidence, is_new
+
+    def match_three_phase(
+        self,
+        embedding: np.ndarray,
+        *,
+        global_code: np.ndarray,
+        local_codes: dict[str, np.ndarray] | None = None,
+        flank: str = "left",
+        coarse_k: int = 20,
+        hamming_k: int = 5,
+        borderline_hamming: float = 0.20,
+    ) -> tuple[str | None, float, str]:
+        """Run coarse FAISS filter, Hamming search, and local patch refinement."""
+
+        candidates = self.registry.search_candidates(embedding, flank=flank, k=coarse_k)
+        if not candidates:
+            return None, 1.0, "empty"
+
+        candidate_ids = [zebra_id for zebra_id, _ in candidates]
+        hamming_matches = self.registry.hamming_search(
+            global_code,
+            flank=flank,
+            candidate_ids=candidate_ids,
+            k=hamming_k,
+        )
+        if not hamming_matches:
+            return candidate_ids[0], 1.0 - candidates[0][1], "coarse"
+
+        best_id, best_hamming = hamming_matches[0]
+        if local_codes and best_hamming <= borderline_hamming:
+            refined = self.registry.local_refine(
+                local_codes,
+                [zebra_id for zebra_id, _ in hamming_matches],
+                flank=flank,
+            )
+            if refined:
+                refined_id, refined_distance = refined[0]
+                return refined_id, 1.0 - refined_distance, "local_refine"
+
+        return best_id, 1.0 - best_hamming, "hamming"
     
     def add_zebra(self, embedding: np.ndarray, zebra_id: str, flank: str = "left") -> None:
         """Add a new zebra embedding to the registry.

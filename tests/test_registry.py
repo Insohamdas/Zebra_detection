@@ -124,3 +124,43 @@ def test_faiss_store_handles_float64_input():
     
     found_id, distance = store.search(embedding)
     assert found_id == "zebra_float64"
+
+
+def test_faiss_store_stores_binary_codes_and_ssi_profile():
+    store = FaissStore(embedding_dim=2048)
+    embedding = np.random.randn(2048).astype(np.float32)
+    global_code = np.zeros(512, dtype=np.uint8)
+    local_codes = {
+        "shoulder": np.zeros(128, dtype=np.uint8),
+        "torso": np.ones(128, dtype=np.uint8),
+        "neck": np.zeros(64, dtype=np.uint8),
+    }
+    ssi_profile = np.ones((3, 38), dtype=np.float32)
+
+    store.add(
+        embedding,
+        "zebra_codes",
+        flank="right",
+        global_code=global_code,
+        local_codes=local_codes,
+        ssi_profile=ssi_profile,
+    )
+
+    assert store.global_codes["right"]["zebra_codes"].shape == (512,)
+    assert store.local_codes["right"]["zebra_codes"]["shoulder"].shape == (128,)
+    assert store.ssi_profiles["right"]["zebra_codes"].shape == (3, 38)
+
+
+def test_faiss_store_hamming_and_local_refine():
+    store = FaissStore(embedding_dim=2048)
+    embedding = np.random.randn(2048).astype(np.float32)
+    global_code = np.zeros(512, dtype=np.uint8)
+    local_codes = {
+        "shoulder": np.zeros(128, dtype=np.uint8),
+        "torso": np.zeros(128, dtype=np.uint8),
+        "neck": np.zeros(64, dtype=np.uint8),
+    }
+    store.add(embedding, "zebra_binary", global_code=global_code, local_codes=local_codes)
+
+    assert store.hamming_search(global_code)[0][0] == "zebra_binary"
+    assert store.local_refine(local_codes, ["zebra_binary"])[0][0] == "zebra_binary"

@@ -198,20 +198,12 @@ def test_distance_affected_by_dimension(registry):
 
 
 def test_new_zebra_id_format(engine):
-    """Test: New zebra IDs are in UUID4 format (registry-assigned)."""
+    """Test: New zebra IDs use readable biometric ZEB format."""
     embedding = np.random.randn(2048).astype(np.float32)
     
     zebra_id = engine.match(embedding)
     
-    # UUID4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-    # Check it's a valid UUID4
-    assert len(zebra_id) == 36  # Standard UUID4 string length with hyphens
     parts = zebra_id.split("-")
-    assert len(parts) == 5
-    assert len(parts[0]) == 8
-    assert len(parts[1]) == 4
-    assert len(parts[2]) == 4
-    assert len(parts[3]) == 4
-    assert len(parts[4]) == 12
-    # UUID4 version byte is '4'
-    assert parts[2].startswith("4") or parts[2][1] == "4"
+    assert parts[0] == "ZEB"
+    assert len(parts) == 6
+    assert all(len(part) == 2 for part in parts[1:])

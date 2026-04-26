@@ -182,11 +182,10 @@ function App() {
 
                 {!loading && file && (
                   <div className="dropzone-content">
-                    <div style={{ width: '240px', height: '240px', borderRadius: 'var(--radius-xl)', overflow: 'hidden', boxShadow: 'var(--shadow-xl)', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <div className={isVideoFile ? 'selected-video-preview' : 'selected-image-preview'}>
                       {isVideoFile ? (
-                        <div style={{ color: '#fff', textAlign: 'center' }}>
-                          <Video size={64} strokeWidth={1.5} />
-                          <p style={{ fontSize: '0.9rem', marginTop: '1rem', opacity: 0.7 }}>{file.name}</p>
+                        <div className="selected-video-icon">
+                          <Video size={70} strokeWidth={1.7} />
                         </div>
                       ) : (
                         <img src={preview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -208,55 +207,72 @@ function App() {
           ) : result ? (
             <motion.div 
               key="result"
-              className={result.unique_zebras ? 'results-container sequence-results-shell' : 'single-result-shell'}
+              className={result.unique_zebras ? 'sequence-results-shell' : 'single-result-shell'}
               initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.5 }}
             >
               {result.unique_zebras ? (
-                <div style={{ width: '100%' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '2.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '1.5rem' }}>
-                    <div>
-                      <h2 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em' }}>Sequence Results</h2>
-                      <p style={{ color: 'var(--text-muted)' }}>Verified {result.unique_zebras.length} individuals from {result.total_frames_processed} samples.</p>
+                <div className="sequence-results-panel">
+                  <div className="sequence-results-header">
+                    <div className="sequence-results-title-group">
+                      <span className="sequence-results-kicker">VIDEO ANALYSIS COMPLETE</span>
+                      <h2>Sequence Results</h2>
+                      <p>Verified identities from processed video samples.</p>
                     </div>
-                    <button className="btn-primary" onClick={resetState}>
+                    <button className="btn-primary sequence-results-action" onClick={resetState}>
                       <RefreshCw size={18} /> New Analysis
                     </button>
                   </div>
 
-                  <div className="metrics-grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
+                  <div className="sequence-summary-grid">
+                    <div className="sequence-summary-item">
+                      <span>INDIVIDUALS</span>
+                      <strong>{result.unique_zebras.length}</strong>
+                    </div>
+                    <div className="sequence-summary-item">
+                      <span>SAMPLES</span>
+                      <strong>{result.total_frames_processed}</strong>
+                    </div>
+                    <div className="sequence-summary-item">
+                      <span>AVG CONFIDENCE</span>
+                      <strong>
+                        {(result.unique_zebras.reduce((sum, zebra) => sum + zebra.confidence, 0) / Math.max(result.unique_zebras.length, 1) * 100).toFixed(1)}%
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="sequence-card-grid">
                     {result.unique_zebras.map((zebra, idx) => (
                       <motion.div 
                         key={idx} 
-                        style={{ background: 'white', borderRadius: '1.25rem', padding: '1.5rem', border: '1px solid var(--border)' }}
+                        className="sequence-zebra-card"
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: idx * 0.05 }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                          <div style={{ background: zebra.is_new ? 'rgba(16, 185, 129, 0.1)' : 'rgba(37, 99, 235, 0.1)', color: zebra.is_new ? 'var(--success)' : 'var(--primary)', padding: '0.4rem 0.8rem', borderRadius: '8px', fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase' }}>
+                        <div className="sequence-card-topline">
+                          <div className={`sequence-status-pill ${zebra.is_new ? 'is-new' : 'is-match'}`}>
                             {zebra.is_new ? 'New Profile' : 'Registry Match'}
                           </div>
                           <button 
+                            className="copy-id-button sequence-copy-button"
                             onClick={() => navigator.clipboard.writeText(zebra.zebra_id)}
-                            style={{ color: 'var(--primary)', background: 'rgba(37, 99, 235, 0.1)', padding: '0.5rem', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.2s ease', border: '1px solid transparent' }}
-                            onMouseOver={(e) => e.currentTarget.style.borderColor = 'var(--primary)'}
-                            onMouseOut={(e) => e.currentTarget.style.borderColor = 'transparent'}
                             title="Copy ID"
+                            aria-label="Copy biometric ID"
                           >
-                            <Copy size={16} />
+                            <Copy size={16} strokeWidth={2.2} />
                           </button>
                         </div>
-                        <div style={{ fontSize: '1.1rem', fontWeight: 800, fontFamily: 'monospace', marginBottom: '1.25rem' }}>{zebra.zebra_id}</div>
-                        <div style={{ display: 'flex', gap: '1.5rem' }}>
-                          <div>
-                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600 }}>CONFIDENCE</div>
-                            <div style={{ fontSize: '1rem', fontWeight: 700 }}>{(zebra.confidence * 100).toFixed(1)}%</div>
+                        <div className="sequence-zebra-id">{zebra.zebra_id}</div>
+                        <div className="sequence-card-metrics">
+                          <div className="sequence-card-metric">
+                            <span>CONFIDENCE</span>
+                            <strong>{(zebra.confidence * 100).toFixed(1)}%</strong>
                           </div>
-                          <div>
-                            <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600 }}>STATUS</div>
-                            <div style={{ fontSize: '1rem', fontWeight: 700 }}>{zebra.is_new ? 'ENROLLED' : 'SYNCED'}</div>
+                          <div className="sequence-card-metric">
+                            <span>STATUS</span>
+                            <strong>{zebra.is_new ? 'ENROLLED' : 'SYNCED'}</strong>
                           </div>
                         </div>
                       </motion.div>

@@ -12,10 +12,20 @@ from .pipeline import (
 	segment_and_clean,
 )
 from .detector import ZebraDetector
+from .prefilter import (
+	FramePrefilter,
+	FramePrefilterConfig,
+	FramePrefilterDecision,
+	ResNet18FramePrefilter,
+)
 
 __all__ = [
 	"ZebraSegmenter",
 	"ZebraDetector",
+	"FramePrefilter",
+	"FramePrefilterConfig",
+	"FramePrefilterDecision",
+	"ResNet18FramePrefilter",
 	"apply_mask",
 	"enhance",
 	"extract_patches",

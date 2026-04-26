@@ -12,6 +12,26 @@ import numpy as np
 LOGGER = logging.getLogger(__name__)
 
 
+def hamming_distance(a: np.ndarray, b: np.ndarray) -> float:
+    """Return normalized Hamming distance for two binary codes."""
+
+    a_bits = np.asarray(a, dtype=np.uint8).ravel()
+    b_bits = np.asarray(b, dtype=np.uint8).ravel()
+    if a_bits.shape != b_bits.shape:
+        raise ValueError("binary codes must have the same shape")
+    if a_bits.size == 0:
+        return 0.0
+    return float(np.mean(a_bits != b_bits))
+
+
+def _pack_bits(bits: np.ndarray) -> bytes:
+    return np.packbits(np.asarray(bits, dtype=np.uint8).ravel()).tobytes()
+
+
+def _unpack_bits(blob: bytes, bit_count: int) -> np.ndarray:
+    return np.unpackbits(np.frombuffer(blob, dtype=np.uint8))[:bit_count].astype(np.uint8)
+
+
 class PersistentFaissStore:
     """Thread-safe FAISS registry with SQLite metadata persistence.
     
@@ -49,6 +69,10 @@ class PersistentFaissStore:
         }
         # Map (flank, index_within_flank_index) -> zebra_id
         self.flank_ids: dict[str, list[str]] = {"left": [], "right": []}
+        self.global_codes: dict[str, dict[str, np.ndarray]] = {"left": {}, "right": {}}
+        self.local_codes: dict[str, dict[str, dict[str, np.ndarray]]] = {"left": {}, "right": {}}
+        self.ssi_profiles: dict[str, dict[str, np.ndarray]] = {"left": {}, "right": {}}
+        self.drift_flags: dict[str, dict[str, bool]] = {"left": {}, "right": {}}
         
         # Initialize or load index
         if self.store_path:
@@ -87,7 +111,13 @@ class PersistentFaissStore:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 observation_count INTEGER DEFAULT 1,
                 model_ver TEXT DEFAULT 'v1.0',
-                ref_image BLOB NULL
+                ref_image BLOB NULL,
+                global_code BLOB NULL,
+                shoulder_code BLOB NULL,
+                torso_code BLOB NULL,
+                neck_code BLOB NULL,
+                ssi_profile BLOB NULL,
+                drift_flag INTEGER DEFAULT 0
             )
         """)
         # Ensure we can efficiently find an ID by its position in a flank index
@@ -118,14 +148,43 @@ class PersistentFaissStore:
             cursor.execute("ALTER TABLE zebras ADD COLUMN model_ver TEXT DEFAULT 'v1.0'")
         if 'ref_image' not in columns:
             cursor.execute("ALTER TABLE zebras ADD COLUMN ref_image BLOB NULL")
+        if 'global_code' not in columns:
+            cursor.execute("ALTER TABLE zebras ADD COLUMN global_code BLOB NULL")
+        if 'shoulder_code' not in columns:
+            cursor.execute("ALTER TABLE zebras ADD COLUMN shoulder_code BLOB NULL")
+        if 'torso_code' not in columns:
+            cursor.execute("ALTER TABLE zebras ADD COLUMN torso_code BLOB NULL")
+        if 'neck_code' not in columns:
+            cursor.execute("ALTER TABLE zebras ADD COLUMN neck_code BLOB NULL")
+        if 'ssi_profile' not in columns:
+            cursor.execute("ALTER TABLE zebras ADD COLUMN ssi_profile BLOB NULL")
+        if 'drift_flag' not in columns:
+            cursor.execute("ALTER TABLE zebras ADD COLUMN drift_flag INTEGER DEFAULT 0")
         
         conn.commit()
-        cursor.execute("SELECT id, flank FROM zebras ORDER BY flank, embedding_index")
+        cursor.execute(
+            "SELECT id, flank, global_code, shoulder_code, torso_code, neck_code, ssi_profile, drift_flag "
+            "FROM zebras ORDER BY flank, embedding_index"
+        )
         
-        for zebra_id, flank in cursor.fetchall():
+        for zebra_id, flank, global_code, shoulder_code, torso_code, neck_code, ssi_profile, drift_flag in cursor.fetchall():
             if flank not in self.flank_ids:
                 flank = "left"
             self.flank_ids[flank].append(zebra_id)
+            if global_code is not None:
+                self.global_codes[flank][zebra_id] = _unpack_bits(global_code, 512)
+            local = {}
+            if shoulder_code is not None:
+                local["shoulder"] = _unpack_bits(shoulder_code, 128)
+            if torso_code is not None:
+                local["torso"] = _unpack_bits(torso_code, 128)
+            if neck_code is not None:
+                local["neck"] = _unpack_bits(neck_code, 64)
+            if local:
+                self.local_codes[flank][zebra_id] = local
+            if ssi_profile is not None:
+                self.ssi_profiles[flank][zebra_id] = np.frombuffer(ssi_profile, dtype=np.float32)
+            self.drift_flags[flank][zebra_id] = bool(drift_flag)
         
         conn.close()
         total_zebras = sum(len(v) for v in self.flank_ids.values())
@@ -181,7 +240,11 @@ class PersistentFaissStore:
         zebra_id: str, 
         flank: str = "left",
         model_ver: str = "v1.0",
-        ref_image: bytes | None = None
+        ref_image: bytes | None = None,
+        global_code: np.ndarray | None = None,
+        local_codes: dict[str, np.ndarray] | None = None,
+        ssi_profile: np.ndarray | None = None,
+        drift_flag: bool = False,
     ) -> None:
         """Add embedding to index and store metadata.
         
@@ -202,6 +265,14 @@ class PersistentFaissStore:
         vec = np.ascontiguousarray(embedding.reshape(1, -1), dtype=np.float32)
         self.indices[flank].add(vec)
         self.flank_ids[flank].append(zebra_id)
+        self._store_codes(
+            zebra_id,
+            flank=flank,
+            global_code=global_code,
+            local_codes=local_codes,
+            ssi_profile=ssi_profile,
+            drift_flag=drift_flag,
+        )
         
         # Store metadata in SQLite
         if self.db_file:
@@ -210,8 +281,25 @@ class PersistentFaissStore:
             
             try:
                 cursor.execute(
-                    "INSERT INTO zebras (id, embedding_index, flank, model_ver, ref_image) VALUES (?, ?, ?, ?, ?)",
-                    (zebra_id, len(self.flank_ids[flank]) - 1, flank, model_ver, ref_image),
+                    """
+                    INSERT INTO zebras (
+                        id, embedding_index, flank, model_ver, ref_image,
+                        global_code, shoulder_code, torso_code, neck_code, ssi_profile, drift_flag
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        zebra_id,
+                        len(self.flank_ids[flank]) - 1,
+                        flank,
+                        model_ver,
+                        ref_image,
+                        _pack_bits(global_code) if global_code is not None else None,
+                        _pack_bits(local_codes.get("shoulder")) if local_codes and "shoulder" in local_codes else None,
+                        _pack_bits(local_codes.get("torso")) if local_codes and "torso" in local_codes else None,
+                        _pack_bits(local_codes.get("neck")) if local_codes and "neck" in local_codes else None,
+                        np.asarray(ssi_profile, dtype=np.float32).tobytes() if ssi_profile is not None else None,
+                        int(drift_flag),
+                    ),
                 )
                 conn.commit()
             except sqlite3.IntegrityError:
@@ -224,7 +312,15 @@ class PersistentFaissStore:
             finally:
                 conn.close()
     
-    def update_embedding(self, zebra_id: str, new_embedding: np.ndarray, flank: str = "left", alpha: float = 0.1) -> None:
+    def update_embedding(
+        self,
+        zebra_id: str,
+        new_embedding: np.ndarray,
+        flank: str = "left",
+        alpha: float = 0.1,
+        global_code: np.ndarray | None = None,
+        drift_threshold: float = 0.35,
+    ) -> bool:
         """Update an existing embedding using an Exponential Moving Average.
         
         For IndexFlatIP, we reconstruct all vectors, replace the target,
@@ -262,25 +358,37 @@ class PersistentFaissStore:
         new_index.add(np.ascontiguousarray(all_vectors, dtype=np.float32))
         self.indices[flank] = new_index
         
+        drift_flag = self.flag_temporal_drift(
+            zebra_id,
+            flank=flank,
+            query_code=global_code,
+            threshold=drift_threshold,
+        )
+
         # Update observation count in database
         if self.db_file:
             conn = sqlite3.connect(self.db_file)
             cursor = conn.cursor()
             try:
                 cursor.execute(
-                    "UPDATE zebras SET observation_count = observation_count + 1 WHERE id = ?",
-                    (zebra_id,),
+                    "UPDATE zebras SET observation_count = observation_count + 1, drift_flag = ? WHERE id = ?",
+                    (int(drift_flag), zebra_id),
                 )
                 conn.commit()
             finally:
                 conn.close()
+        return drift_flag
     
     def add_and_get_id(
         self, 
         embedding: np.ndarray, 
         flank: str = "left",
         model_ver: str = "v1.0",
-        ref_image: bytes | None = None
+        ref_image: bytes | None = None,
+        stripe_stats: np.ndarray | None = None,
+        global_code: np.ndarray | None = None,
+        local_codes: dict[str, np.ndarray] | None = None,
+        ssi_profile: np.ndarray | None = None,
     ) -> str:
         """Add embedding to registry and get assigned ID.
         
@@ -293,15 +401,25 @@ class PersistentFaissStore:
             ref_image: Best-quality reference crop (JPEG bytes) for re-encoding
         
         Returns:
-            Registry-assigned unique ID (UUID4 string)
+            Registry-assigned readable biometric ID.
         """
-        from uuid import uuid4
+        from zebraid.id_generator import generate_code
         
-        # Generate a new unique ID
-        zebra_id = str(uuid4())
+        zebra_id = generate_code(embedding, stripe_stats=stripe_stats)
+        if zebra_id in self.flank_ids.get(flank, []):
+            zebra_id = f"{zebra_id}-{len(self.flank_ids[flank]) + 1:02d}"
         
         # Add embedding with this ID and flank
-        self.add(embedding, zebra_id, flank=flank, model_ver=model_ver, ref_image=ref_image)
+        self.add(
+            embedding,
+            zebra_id,
+            flank=flank,
+            model_ver=model_ver,
+            ref_image=ref_image,
+            global_code=global_code,
+            local_codes=local_codes,
+            ssi_profile=ssi_profile,
+        )
         
         return zebra_id
     
@@ -332,6 +450,108 @@ class PersistentFaissStore:
         vec = np.ascontiguousarray(embedding.reshape(1, -1), dtype=np.float32)
         D, I = idx.search(vec, k)
         return self.flank_ids[flank][I[0][0]], float(D[0][0])
+
+    def search_candidates(self, embedding: np.ndarray, flank: str = "left", k: int = 20) -> list[tuple[str, float]]:
+        """Return top-k FAISS candidates for the requested flank."""
+
+        if flank not in self.indices:
+            raise ValueError(f"Invalid flank '{flank}'")
+        idx = self.indices[flank]
+        if idx.ntotal == 0:
+            return []
+
+        embedding = self._normalize(embedding)
+        vec = np.ascontiguousarray(embedding.reshape(1, -1), dtype=np.float32)
+        D, I = idx.search(vec, min(k, idx.ntotal))
+        candidates = []
+        for distance, index in zip(D[0], I[0]):
+            if index < 0:
+                continue
+            candidates.append((self.flank_ids[flank][int(index)], float(distance)))
+        return candidates
+
+    def hamming_search(
+        self,
+        query_code: np.ndarray,
+        *,
+        flank: str = "left",
+        candidate_ids: list[str] | None = None,
+        k: int = 20,
+    ) -> list[tuple[str, float]]:
+        """Search flank-specific global binary codes by normalized Hamming distance."""
+
+        ids = candidate_ids or list(self.global_codes[flank].keys())
+        scored = []
+        for zebra_id in ids:
+            code = self.global_codes[flank].get(zebra_id)
+            if code is None:
+                continue
+            scored.append((zebra_id, hamming_distance(query_code, code)))
+        scored.sort(key=lambda item: item[1])
+        return scored[:k]
+
+    def local_refine(
+        self,
+        query_local_codes: dict[str, np.ndarray],
+        candidate_ids: list[str],
+        *,
+        flank: str = "left",
+    ) -> list[tuple[str, float]]:
+        """Refine candidates by shoulder/torso/neck patch-code Hamming distance."""
+
+        scored = []
+        for zebra_id in candidate_ids:
+            stored = self.local_codes[flank].get(zebra_id)
+            if not stored:
+                continue
+            distances = []
+            for zone, query_code in query_local_codes.items():
+                if zone in stored:
+                    distances.append(hamming_distance(query_code, stored[zone]))
+            if distances:
+                scored.append((zebra_id, float(np.mean(distances))))
+        scored.sort(key=lambda item: item[1])
+        return scored
+
+    def flag_temporal_drift(
+        self,
+        zebra_id: str,
+        *,
+        flank: str = "left",
+        query_code: np.ndarray | None = None,
+        threshold: float = 0.35,
+    ) -> bool:
+        """Flag identity drift when Hamming distance exceeds threshold."""
+
+        if query_code is None:
+            return self.drift_flags[flank].get(zebra_id, False)
+        stored = self.global_codes[flank].get(zebra_id)
+        if stored is None:
+            return False
+        drift = hamming_distance(query_code, stored) > threshold
+        self.drift_flags[flank][zebra_id] = drift
+        return drift
+
+    def _store_codes(
+        self,
+        zebra_id: str,
+        *,
+        flank: str,
+        global_code: np.ndarray | None = None,
+        local_codes: dict[str, np.ndarray] | None = None,
+        ssi_profile: np.ndarray | None = None,
+        drift_flag: bool = False,
+    ) -> None:
+        if global_code is not None:
+            self.global_codes[flank][zebra_id] = np.asarray(global_code, dtype=np.uint8).ravel()
+        if local_codes:
+            self.local_codes[flank][zebra_id] = {
+                zone: np.asarray(code, dtype=np.uint8).ravel()
+                for zone, code in local_codes.items()
+            }
+        if ssi_profile is not None:
+            self.ssi_profiles[flank][zebra_id] = np.asarray(ssi_profile, dtype=np.float32)
+        self.drift_flags[flank][zebra_id] = drift_flag
     
     @property
     def ntotal(self) -> int:

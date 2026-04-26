@@ -1,72 +1,71 @@
-import uuid
+import re
 
-import pytest
+import numpy as np
 
-from zebraid.id_generator import generate_code, generate_dual_code
-
-
-def test_generate_code_returns_valid_uuid():
-    """Test that generate_code returns a valid UUID string.
-    
-    NOTE: generate_code is deprecated. IDs are now assigned by the registry.
-    This test is maintained for backward compatibility.
-    """
-    code = generate_code()
-    
-    # Should be a valid UUID string
-    uuid_obj = uuid.UUID(code)
-    assert str(uuid_obj) == code
-    assert len(code) == 36  # UUID format with hyphens
+from zebraid.id_generator import (
+    ITQBinarizer,
+    generate_code,
+    generate_dual_code,
+    generate_readable_code,
+    global_itq_code,
+    local_patch_codes,
+    pack_bits,
+)
 
 
-def test_generate_code_is_unique():
-    """Test that generate_code produces unique values.
-    
-    NOTE: generate_code is deprecated. IDs are now assigned by the registry.
-    This test is maintained for backward compatibility.
-    """
-    code1 = generate_code()
-    code2 = generate_code()
-    
-    # UUIDs should be unique
-    assert code1 != code2
+def test_global_itq_code_is_512_bits():
+    descriptor = np.linspace(-1.0, 1.0, 1024, dtype=np.float32)
+
+    code = global_itq_code(descriptor)
+
+    assert code.shape == (512,)
+    assert set(np.unique(code)).issubset({0, 1})
+    assert len(pack_bits(code)) == 64
 
 
-def test_generate_dual_code_returns_both_codes():
-    """Test that generate_dual_code returns both global and local codes.
-    
-    NOTE: generate_dual_code is deprecated. IDs are now assigned by the registry.
-    This test is maintained for backward compatibility.
-    """
-    result = generate_dual_code()
-    
-    assert "global" in result
-    assert "local" in result
-    
-    # Both should be valid UUIDs
-    uuid.UUID(result["global"])
-    uuid.UUID(result["local"])
-    
-    # They should be different (each a unique UUID)
-    assert result["global"] != result["local"]
+def test_itq_binarizer_accepts_trained_projection():
+    projection = np.eye(4, 2, dtype=np.float32)
+    binarizer = ITQBinarizer(input_dim=4, output_bits=2, projection=projection)
+
+    code = binarizer.transform_one(np.array([1.0, -1.0, 0.0, 0.0], dtype=np.float32))
+
+    assert code.tolist() == [1, 0]
 
 
-def test_generate_dual_code_format():
-    """Test that dual codes are in UUID format.
-    
-    NOTE: generate_dual_code is deprecated. IDs are now assigned by the registry.
-    This test is maintained for backward compatibility.
-    """
-    for _ in range(5):
-        result = generate_dual_code()
-        
-        global_code = result["global"]
-        local_code = result["local"]
-        
-        # Both should be 36-character UUID strings
-        assert len(global_code) == 36
-        assert len(local_code) == 36
-        
-        # Should be parseable as UUIDs
-        uuid.UUID(global_code)
-        uuid.UUID(local_code)
+def test_local_patch_codes_have_paper_bit_lengths():
+    zone_descriptors = {
+        "shoulder": np.linspace(-1, 1, 96, dtype=np.float32),
+        "torso": np.linspace(1, -1, 96, dtype=np.float32),
+        "neck": np.ones(96, dtype=np.float32),
+    }
+
+    codes = local_patch_codes(zone_descriptors)
+
+    assert codes.shoulder.shape == (128,)
+    assert codes.torso.shape == (128,)
+    assert codes.neck.shape == (64,)
+
+
+def test_generate_readable_code_format_from_stripe_stats():
+    stripe_stats = np.array(
+        [
+            12, 5.2, 1.1, 8.6, 0.2, 0.01,
+            18, 6.1, 1.3, 7.4, 0.4, 0.02,
+            15, 4.8, 1.0, 9.1, 0.1, 0.03,
+        ],
+        dtype=np.float32,
+    )
+
+    code = generate_readable_code(stripe_stats)
+
+    assert re.match(r"^ZEB-\d{2}-\d{2}-\d{2}-\d{2}-[0-9A-F]{2}$", code)
+    assert code.startswith("ZEB-45-05-08-")
+
+
+def test_generate_code_and_dual_code_are_readable():
+    code = generate_code(np.ones(1138, dtype=np.float32))
+    dual = generate_dual_code(np.ones(1138, dtype=np.float32), np.zeros(96, dtype=np.float32))
+
+    assert code.startswith("ZEB-")
+    assert dual["global"].startswith("ZEB-")
+    assert dual["local"].startswith("ZEB-")

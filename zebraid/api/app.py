@@ -16,12 +16,13 @@ from pydantic import BaseModel
 from zebraid.feature_engine import (
     FeatureEncoder, 
     FlankClassifier,
-    gabor_features,
+    engineered_stripe_features,
     combine_features
 )
 from zebraid.matching import MatchingEngine
 from zebraid.registry import FaissStore
 from zebraid.preprocessing import ZebraSegmenter, prepare_tensor
+from zebraid.id_generator import global_itq_code, local_patch_codes
 
 LOGGER = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ def get_pipeline():
     
     if _registry is None:
         registry_path = os.getenv("REGISTRY_PATH", None)
-        _registry = FaissStore(embedding_dim=160, store_path=registry_path)
+        _registry = FaissStore(embedding_dim=1138, store_path=registry_path)
         _engine = MatchingEngine(registry=_registry, similarity_threshold=0.75)
         _encoder = FeatureEncoder()
         _segmenter = ZebraSegmenter(backend="sam")
@@ -121,31 +122,42 @@ def create_app() -> FastAPI:
                     status_code=400, detail="Could not decode image file"
                 )
             
-            from zebraid.pipelines.real_identify import quality_score
-            is_good, qual_val = quality_score(frame)
-            if not is_good:
+            from zebraid.pipelines.real_identify import prefilter_decision
+            prefilter = prefilter_decision(frame)
+            if not prefilter.passed:
                 raise HTTPException(status_code=422, detail="low_quality")
+            qual_val = prefilter.score
 
             # Get pipeline components
             registry, engine, encoder, segmenter, flank_classifier, detector = get_pipeline()
 
-            # Detect zebras
-            if not detector.detect(frame):
+            # Detect zebra and pass the best box as a SAM prompt for body masking.
+            zebra_boxes = detector.detect_boxes(frame)
+            if not zebra_boxes:
                 raise HTTPException(status_code=400, detail="no_zebra")
+            zebra_box = zebra_boxes[0]
 
             # Segment, clean, and convert to tensor before encoding.
-            frame_tensor = prepare_tensor(frame, segmenter=segmenter)
+            frame_tensor = prepare_tensor(frame, segmenter=segmenter, box=zebra_box)
 
             # Extract embedding
             with torch.no_grad():
-                resnet_embedding = encoder.encode(frame_tensor)
+                if hasattr(encoder, "encode_multiscale"):
+                    resnet_embedding = encoder.encode_multiscale(frame_tensor)
+                else:
+                    resnet_embedding = encoder.encode(frame_tensor)
                 
-                # Extract Gabor features
-                g_feats = gabor_features(frame)
-                gabor_tensor = torch.from_numpy(g_feats).unsqueeze(0).to(resnet_embedding.device)
+                engineered_feats = engineered_stripe_features(frame)
+                engineered_tensor = torch.from_numpy(engineered_feats).unsqueeze(0).to(resnet_embedding.device)
                 
-                # Combine ResNet and Gabor features with alpha weighting
-                embedding = combine_features(resnet_embedding, [gabor_tensor], alpha=0.7)
+                embedding = combine_features(resnet_embedding, [engineered_tensor], alpha=0.7)
+                global_code = global_itq_code(resnet_embedding.squeeze().detach().cpu().numpy())
+                zone_feats = engineered_feats[:96].reshape(3, 32)
+                patch_codes = local_patch_codes({
+                    "shoulder": zone_feats[0],
+                    "torso": zone_feats[1],
+                    "neck": zone_feats[2],
+                })
 
             # Convert to numpy for matching
             embedding_np = embedding.squeeze().detach().cpu().numpy().astype(np.float32)
@@ -155,7 +167,17 @@ def create_app() -> FastAPI:
 
             # Match against registry
             zebra_id, confidence, is_new = engine.match_with_confidence(
-                embedding_np, flank=flank, frame_id="api_upload", quality_score=qual_val, ref_image=contents
+                embedding_np,
+                flank=flank,
+                frame_id="api_upload",
+                quality_score=qual_val,
+                ref_image=contents,
+                global_code=global_code,
+                local_codes={
+                    "shoulder": patch_codes.shoulder,
+                    "torso": patch_codes.torso,
+                    "neck": patch_codes.neck,
+                },
             )
 
             return IdentificationResponse(
@@ -176,7 +198,7 @@ def create_app() -> FastAPI:
         import tempfile
         import cv2
         import torch
-        from zebraid.pipelines.real_identify import quality_score
+        from zebraid.pipelines.real_identify import prefilter_decision
 
         # Save video to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(video.filename)[1]) as tmp:
@@ -206,24 +228,37 @@ def create_app() -> FastAPI:
                     processed_count += 1
                     
                     # 1. Detection
-                    if not detector.detect(frame):
+                    zebra_boxes = detector.detect_boxes(frame)
+                    if not zebra_boxes:
                         frame_count += 1
                         continue
+                    zebra_box = zebra_boxes[0]
                         
                     # 2. Quality
-                    is_good, qual_val = quality_score(frame)
-                    if not is_good:
+                    prefilter = prefilter_decision(frame)
+                    if not prefilter.passed:
                         frame_count += 1
                         continue
+                    qual_val = prefilter.score
                         
                     # 3. Processing
-                    frame_tensor = prepare_tensor(frame, segmenter=segmenter)
+                    frame_tensor = prepare_tensor(frame, segmenter=segmenter, box=zebra_box)
                     
                     with torch.no_grad():
-                        resnet_embedding = encoder.encode(frame_tensor)
-                        g_feats = gabor_features(frame)
-                        gabor_tensor = torch.from_numpy(g_feats).unsqueeze(0).to(resnet_embedding.device)
-                        embedding = combine_features(resnet_embedding, [gabor_tensor], alpha=0.7)
+                        if hasattr(encoder, "encode_multiscale"):
+                            resnet_embedding = encoder.encode_multiscale(frame_tensor)
+                        else:
+                            resnet_embedding = encoder.encode(frame_tensor)
+                        engineered_feats = engineered_stripe_features(frame)
+                        engineered_tensor = torch.from_numpy(engineered_feats).unsqueeze(0).to(resnet_embedding.device)
+                        embedding = combine_features(resnet_embedding, [engineered_tensor], alpha=0.7)
+                        global_code = global_itq_code(resnet_embedding.squeeze().detach().cpu().numpy())
+                        zone_feats = engineered_feats[:96].reshape(3, 32)
+                        patch_codes = local_patch_codes({
+                            "shoulder": zone_feats[0],
+                            "torso": zone_feats[1],
+                            "neck": zone_feats[2],
+                        })
                         
                     embedding_np = embedding.squeeze().detach().cpu().numpy().astype(np.float32)
                     flank = flank_classifier.classify(frame)
@@ -235,7 +270,14 @@ def create_app() -> FastAPI:
                     # Match
                     zebra_id, confidence, is_new = engine.match_with_confidence(
                         embedding_np, flank=flank, frame_id=f"video_{video.filename}_{frame_count}", 
-                        quality_score=qual_val, ref_image=frame_bytes
+                        quality_score=qual_val,
+                        ref_image=frame_bytes,
+                        global_code=global_code,
+                        local_codes={
+                            "shoulder": patch_codes.shoulder,
+                            "torso": patch_codes.torso,
+                            "neck": patch_codes.neck,
+                        },
                     )
                     
                     # Store unique ID results (keep the highest confidence one)

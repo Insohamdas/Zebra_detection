@@ -11,13 +11,14 @@ import torch
 from zebraid.feature_engine import (
     FeatureEncoder, 
     FlankClassifier,
-    gabor_features,
+    engineered_stripe_features,
     combine_features
 )
 from zebraid.matching import MatchingEngine
 from zebraid.pipelines.live_identification import IdentificationCandidate
 from zebraid.registry import FaissStore
-from zebraid.preprocessing import ZebraSegmenter, prepare_tensor
+from zebraid.preprocessing import FramePrefilter, FramePrefilterDecision, ZebraSegmenter, prepare_tensor
+from zebraid.id_generator import global_itq_code, local_patch_codes
 
 
 @dataclass(frozen=True)
@@ -27,17 +28,19 @@ class QualityRejected:
 
 
 def quality_score(crop: np.ndarray) -> tuple[bool, float]:
-    """Assess whether a crop meets minimal acceptable quality for embeddings."""
-    if crop.ndim == 3 and crop.shape[2] == 3:
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = crop
-    
-    blur = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    h, w = crop.shape[:2]
-    size_ok = (h >= 128 and w >= 128)
-    blur_ok = blur > 80
-    return bool(blur_ok and size_ok), blur
+    """Assess whether a crop meets minimal acceptable quality for embeddings.
+
+    The score is now the pre-filter score in the [0, 1] range. It includes
+    blur and overexposure checks before the expensive identification stages.
+    """
+    decision = prefilter_decision(crop)
+    return decision.passed, decision.score
+
+
+def prefilter_decision(crop: np.ndarray) -> FramePrefilterDecision:
+    """Return detailed pre-filter decision for blur/overexposure rejection."""
+
+    return FramePrefilter().evaluate(crop)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -48,6 +51,7 @@ def create_real_identifier(
     encoder: FeatureEncoder | None = None,
     segmenter: ZebraSegmenter | None = None,
     flank_classifier: FlankClassifier | None = None,
+    detector: object | None = None,
     segment_input: bool = True,
     match_threshold: float = 0.75,
 ) -> callable:
@@ -69,7 +73,7 @@ def create_real_identifier(
     """
     # Initialize defaults if not provided
     if registry is None:
-        registry = FaissStore(embedding_dim=2048)
+        registry = FaissStore(embedding_dim=1138)
     
     if encoder is None:
         encoder = FeatureEncoder()
@@ -101,14 +105,21 @@ def create_real_identifier(
         if frame is None or frame.size == 0:
             return None
         
-        is_good, qual_val = quality_score(frame)
-        if not is_good:
-            return QualityRejected(reason="low_quality")
+        prefilter = prefilter_decision(frame)
+        if not prefilter.passed:
+            return QualityRejected(reason=",".join(prefilter.reasons) or "low_quality")
+        qual_val = prefilter.score
         
         try:
             # Step 1: Segment and clean the crop before encoding when requested.
             if segment_input:
-                frame_tensor = prepare_tensor(frame, segmenter=segmenter)
+                zebra_box = None
+                if detector is not None and hasattr(detector, "best_box"):
+                    zebra_box = detector.best_box(frame)
+                    if zebra_box is None:
+                        return None
+
+                frame_tensor = prepare_tensor(frame, segmenter=segmenter, box=zebra_box)
             else:
                 if frame.ndim != 3 or frame.shape[2] != 3:
                     return None
@@ -126,14 +137,22 @@ def create_real_identifier(
 
             # Step 2: Extract embedding using encoder
             with torch.no_grad():
-                resnet_embedding = encoder.encode(frame_tensor)
+                if hasattr(encoder, "encode_multiscale"):
+                    resnet_embedding = encoder.encode_multiscale(frame_tensor)
+                else:
+                    resnet_embedding = encoder.encode(frame_tensor)
                 
-                # Extract Gabor features (returns 1D numpy array of length 32)
-                g_feats = gabor_features(frame)
-                gabor_tensor = torch.from_numpy(g_feats).unsqueeze(0).to(resnet_embedding.device)
+                engineered_feats = engineered_stripe_features(frame)
+                engineered_tensor = torch.from_numpy(engineered_feats).unsqueeze(0).to(resnet_embedding.device)
                 
-                # Combine ResNet and Gabor features with alpha weighting (default alpha=0.7)
-                embedding = combine_features(resnet_embedding, [gabor_tensor], alpha=0.7)
+                embedding = combine_features(resnet_embedding, [engineered_tensor], alpha=0.7)
+                global_code = global_itq_code(resnet_embedding.squeeze().detach().cpu().numpy())
+                zone_feats = engineered_feats[:96].reshape(3, 32)
+                patch_codes = local_patch_codes({
+                    "shoulder": zone_feats[0],
+                    "torso": zone_feats[1],
+                    "neck": zone_feats[2],
+                })
             
             # Convert to numpy for matching
             embedding_np = embedding.squeeze().detach().cpu().numpy().astype(np.float32)
@@ -147,7 +166,17 @@ def create_real_identifier(
             
             # Step 4: Match embedding against registry (flank-specific)
             zebra_id, confidence, is_new = matching_engine.match_with_confidence(
-                embedding_np, flank=flank, frame_id="live_crop", quality_score=qual_val, ref_image=ref_image_bytes
+                embedding_np,
+                flank=flank,
+                frame_id="live_crop",
+                quality_score=qual_val,
+                ref_image=ref_image_bytes,
+                global_code=global_code,
+                local_codes={
+                    "shoulder": patch_codes.shoulder,
+                    "torso": patch_codes.torso,
+                    "neck": patch_codes.neck,
+                },
             )
             
             return IdentificationCandidate(
@@ -164,6 +193,7 @@ def create_real_identifier(
     identify_frame.registry = registry  # type: ignore
     identify_frame.encoder = encoder  # type: ignore
     identify_frame.segmenter = segmenter  # type: ignore
+    identify_frame.detector = detector  # type: ignore
     identify_frame.segment_input = segment_input  # type: ignore
     
     return identify_frame

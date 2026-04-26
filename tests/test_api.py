@@ -42,17 +42,21 @@ def test_identify_endpoint_uses_segmentation(monkeypatch) -> None:
 
     class DummyEncoder:
         def encode(self, image_tensor: torch.Tensor) -> torch.Tensor:
-            assert image_tensor.shape == (1, 3, 256, 256)
-            return torch.ones((1, 128), dtype=torch.float32)
+            assert image_tensor.shape == (1, 3, 256, 512)
+            return torch.ones((1, 512), dtype=torch.float32)
 
     class DummyEngine:
-        def match_with_confidence(self, embedding: np.ndarray, flank: str = "left") -> tuple[str, float, bool]:
-            assert embedding.shape == (160,)
+        def match_with_confidence(self, embedding: np.ndarray, flank: str = "left", **kwargs) -> tuple[str, float, bool]:
+            assert embedding.shape == (626,)
             return "ZEBRA-TEST", 0.95, False
             
     class DummyFlankClassifier:
         def classify(self, frame: np.ndarray) -> str:
             return "left"
+
+    class DummyDetector:
+        def detect_boxes(self, frame: np.ndarray) -> list[np.ndarray]:
+            return [np.array([0, 0, frame.shape[1], frame.shape[0]], dtype=np.float32)]
 
     dummy_segmenter = DummySegmenter()
     dummy_encoder = DummyEncoder()
@@ -62,7 +66,7 @@ def test_identify_endpoint_uses_segmentation(monkeypatch) -> None:
     monkeypatch.setattr(
         app_module,
         "get_pipeline",
-        lambda: (object(), dummy_engine, dummy_encoder, dummy_segmenter, dummy_flank),
+        lambda: (object(), dummy_engine, dummy_encoder, dummy_segmenter, dummy_flank, DummyDetector()),
     )
 
     response = client.post(

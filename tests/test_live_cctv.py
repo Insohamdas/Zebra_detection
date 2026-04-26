@@ -180,7 +180,7 @@ def test_live_pipeline_segments_before_identify() -> None:
 
     def identify_frame(clean_frame: np.ndarray) -> IdentificationCandidate:
         seen_shapes.append(clean_frame.shape)
-        assert clean_frame.shape == (256, 256, 3)
+        assert clean_frame.shape == (256, 512, 3)
         assert clean_frame.dtype == np.uint8
         return IdentificationCandidate("ZEBRA-SEG", 0.99)
 
@@ -204,7 +204,7 @@ def test_live_pipeline_segments_before_identify() -> None:
     assert result.accepted is True
     assert result.is_new is False
     assert result.zebra_id == "ZEBRA-SEG"
-    assert seen_shapes == [(256, 256, 3)]
+    assert seen_shapes == [(256, 512, 3)]
 
 
 def test_live_pipeline_with_real_identifier_segments_once() -> None:
@@ -238,8 +238,8 @@ def test_live_pipeline_with_real_identifier_segments_once() -> None:
 
     class DummyEncoder:
         def encode(self, image_tensor: torch.Tensor) -> torch.Tensor:
-            assert image_tensor.shape == (1, 3, 256, 256)
-            return torch.ones((1, 2048), dtype=torch.float32)
+            assert image_tensor.shape == (1, 3, 256, 512)
+            return torch.ones((1, 512), dtype=torch.float32)
 
     identifier_segmenter = IdentifierSegmenter()
     identify_fn = create_real_identifier(

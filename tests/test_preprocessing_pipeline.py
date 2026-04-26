@@ -38,11 +38,11 @@ def test_enhance_and_normalize_pose_shapes() -> None:
 	normalized = normalize_pose(enhanced)
 
 	assert enhanced.shape == image.shape
-	assert normalized.shape == (256, 256, 3)
+	assert normalized.shape == (256, 512, 3)
 
 
 def test_extract_patches_returns_three_regions() -> None:
-	image = np.zeros((256, 256, 3), dtype=np.uint8)
+	image = np.zeros((256, 512, 3), dtype=np.uint8)
 	patches = extract_patches(image)
 
 	assert set(patches.keys()) == {"shoulder", "torso", "neck"}
@@ -57,7 +57,7 @@ def test_process_image_full_pipeline() -> None:
 	segmenter = ZebraSegmenter(model=lambda img: np.ones(img.shape[:2], dtype=np.uint8))
 	normalized, patches = process_image(image, segmenter=segmenter)
 
-	assert normalized.shape == (256, 256, 3)
+	assert normalized.shape == (256, 512, 3)
 	assert normalized.dtype == np.uint8
 	assert set(patches.keys()) == {"shoulder", "torso", "neck"}
 
@@ -74,10 +74,54 @@ def test_segment_and_clean_and_prepare_tensor_use_mask() -> None:
 	clean = segment_and_clean(image, segmenter=HalfMaskSegmenter())
 	tensor = prepare_tensor(image, segmenter=HalfMaskSegmenter())
 
-	assert clean.shape == (256, 256, 3)
+	assert clean.shape == (256, 512, 3)
 	assert clean.dtype == np.uint8
-	assert tensor.shape == (1, 3, 256, 256)
+	assert tensor.shape == (1, 3, 256, 512)
 	assert tensor.dtype == torch.float32
+
+
+def test_prepare_tensor_forwards_box_prompt_to_segmenter() -> None:
+	image = _sample_bgr_image()
+	box = np.array([12, 8, 96, 72], dtype=np.float32)
+
+	class BoxRecordingSegmenter:
+		def __init__(self):
+			self.box = None
+
+		def segment(self, image: np.ndarray, box: np.ndarray | None = None) -> np.ndarray:
+			self.box = box
+			return np.ones(image.shape[:2], dtype=np.uint8)
+
+	segmenter = BoxRecordingSegmenter()
+	tensor = prepare_tensor(image, segmenter=segmenter, box=box)
+
+	assert tensor.shape == (1, 3, 256, 512)
+	assert segmenter.box is box
+
+
+def test_normalize_pose_accepts_twelve_keypoints() -> None:
+	image = _sample_bgr_image()
+	keypoints = np.array(
+		[
+			[8, 38],
+			[18, 28],
+			[36, 24],
+			[54, 22],
+			[72, 23],
+			[92, 28],
+			[128, 38],
+			[30, 78],
+			[48, 80],
+			[72, 80],
+			[96, 78],
+			[118, 54],
+		],
+		dtype=np.float32,
+	)
+
+	normalized = normalize_pose(image, keypoints=keypoints)
+
+	assert normalized.shape == (256, 512, 3)
 
 
 def test_load_sam_model_falls_back_when_checkpoint_missing() -> None:

@@ -52,9 +52,8 @@ def test_matching_engine_new_zebra_outside_threshold(engine):
     
     # Should create new ID, not return zebra_001
     assert matched_id != "zebra_001"
-    # New ID is registry-assigned UUID4 (36 chars with hyphens)
-    assert len(matched_id) == 36
-    assert matched_id.count("-") == 4
+    assert matched_id.startswith("ZEB-")
+    assert matched_id.count("-") >= 5
 
 
 def test_matching_engine_match_with_confidence(engine):
@@ -162,9 +161,8 @@ def test_matching_engine_empty_registry_creates_new(engine):
     # Registry is empty, so should create new ID
     matched_id = engine.match(embedding, flank="left")
     
-    # New ID is registry-assigned UUID4 (36 chars with hyphens)
-    assert len(matched_id) == 36
-    assert matched_id.count("-") == 4
+    assert matched_id.startswith("ZEB-")
+    assert matched_id.count("-") >= 5
 
 
 def test_matching_engine_multiple_zebras_returns_closest(engine):
@@ -215,3 +213,47 @@ def test_matching_engine_flank_separation(engine):
     
     # Search again on right - should match second ID
     assert engine.match(embedding, flank="right") == id_right
+
+
+def test_matching_engine_three_phase_with_local_refine(engine):
+    embedding_a = np.array([1.0] + [0.0] * 159, dtype=np.float32)
+    embedding_b = np.array([0.9, 0.1] + [0.0] * 158, dtype=np.float32)
+    code_a = np.zeros(512, dtype=np.uint8)
+    code_b = np.zeros(512, dtype=np.uint8)
+    code_b[:20] = 1
+    local_a = {
+        "shoulder": np.zeros(128, dtype=np.uint8),
+        "torso": np.zeros(128, dtype=np.uint8),
+        "neck": np.zeros(64, dtype=np.uint8),
+    }
+    local_b = {
+        "shoulder": np.ones(128, dtype=np.uint8),
+        "torso": np.ones(128, dtype=np.uint8),
+        "neck": np.ones(64, dtype=np.uint8),
+    }
+
+    engine.registry.add(embedding_a, "zebra_A", flank="left", global_code=code_a, local_codes=local_a)
+    engine.registry.add(embedding_b, "zebra_B", flank="left", global_code=code_b, local_codes=local_b)
+
+    matched_id, score, phase = engine.match_three_phase(
+        embedding_a,
+        global_code=code_b,
+        local_codes=local_b,
+        flank="left",
+    )
+
+    assert matched_id == "zebra_B"
+    assert score > 0.9
+    assert phase in {"hamming", "local_refine"}
+
+
+def test_temporal_drift_flag_on_hamming_change(engine):
+    embedding = np.array([1.0] + [0.0] * 159, dtype=np.float32)
+    enrolled_code = np.zeros(512, dtype=np.uint8)
+    drifted_code = np.ones(512, dtype=np.uint8)
+
+    engine.registry.add(embedding, "zebra_drift", flank="left", global_code=enrolled_code)
+    _, _, is_new = engine.match_with_confidence(embedding, flank="left", global_code=drifted_code)
+
+    assert is_new is False
+    assert engine.registry.drift_flags["left"]["zebra_drift"] is True

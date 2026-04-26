@@ -13,7 +13,7 @@ from zebraid.registry import FaissStore
 @pytest.fixture
 def registry():
     """Create a fresh FAISS registry for each test."""
-    return FaissStore(embedding_dim=2048)
+    return FaissStore(embedding_dim=626)
 
 
 @pytest.fixture
@@ -64,9 +64,8 @@ def test_real_identifier_creates_new_zebra_on_first_call(registry, encoder):
     frame = np.random.randint(0, 256, (640, 480, 3), dtype=np.uint8)
     result = identifier(frame)
     
-    # Should create new ID (dual code format)
     assert isinstance(result.zebra_id, str)
-    assert result.zebra_id.count("-") == 9
+    assert result.zebra_id.startswith("ZEB-")
 
 
 def test_real_identifier_matches_identical_frame(registry, encoder):
@@ -184,8 +183,8 @@ def test_real_identifier_confidence_conversion(registry, encoder):
 def test_real_identifier_uses_segmenter_before_encoding(registry):
     class DummyEncoder:
         def encode(self, image_tensor):
-            assert image_tensor.shape == (1, 3, 256, 256)
-            return torch.ones((1, 2048), dtype=torch.float32)
+            assert image_tensor.shape == (1, 3, 256, 512)
+            return torch.ones((1, 512), dtype=torch.float32)
 
     class RecordingSegmenter:
         def __init__(self):

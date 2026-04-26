@@ -13,9 +13,32 @@ import numpy as np
 
 LOGGER = logging.getLogger(__name__)
 SegmentationBackend = Literal["otsu", "sam", "sam2"]
+CanonicalSize = tuple[int, int]
 
 # ImageNet mean in BGR format for background filling
 IMAGENET_MEAN_BGR = (103.53, 116.28, 123.675)
+CANONICAL_TEMPLATE_SIZE: CanonicalSize = (512, 256)
+
+# Twelve side-view anatomical template points in normalized (x, y) order.
+# The points are a canonical target layout for keypoint-driven warping; they are
+# only used when a caller provides detected keypoints.
+CANONICAL_SIDE_VIEW_KEYPOINTS = np.array(
+	[
+		[0.08, 0.40],
+		[0.16, 0.30],
+		[0.28, 0.25],
+		[0.42, 0.23],
+		[0.58, 0.24],
+		[0.74, 0.30],
+		[0.90, 0.40],
+		[0.22, 0.82],
+		[0.36, 0.84],
+		[0.54, 0.84],
+		[0.72, 0.82],
+		[0.84, 0.56],
+	],
+	dtype=np.float32,
+)
 
 
 
@@ -257,12 +280,18 @@ def segment_and_clean(
 	*,
 	segmenter: ZebraSegmenter | None = None,
 	box: np.ndarray | None = None,
+	keypoints: np.ndarray | None = None,
 ) -> np.ndarray:
 	"""Segment a zebra and return a cleaned BGR image ready for encoding."""
 
 	segmenter = segmenter or ZebraSegmenter(backend="sam")
 	image_bgr = _coerce_bgr_uint8(image)
-	mask = segmenter.segment(image_bgr, box=box)
+	try:
+		mask = segmenter.segment(image_bgr, box=box)
+	except TypeError:
+		if box is not None:
+			raise
+		mask = segmenter.segment(image_bgr)
 
 	if mask is None or not np.any(mask):
 		LOGGER.warning("Segmentation produced an empty mask; using the original image")
@@ -272,19 +301,21 @@ def segment_and_clean(
 		cleaned = apply_mask(image_bgr, mask, fill_color=IMAGENET_MEAN_BGR)
 
 	cleaned = enhance(cleaned)
-	return normalize_pose(cleaned)
+	return normalize_pose(cleaned, keypoints=keypoints)
 
 
 def prepare_tensor(
 	image: np.ndarray,
 	*,
 	segmenter: ZebraSegmenter | None = None,
+	box: np.ndarray | None = None,
+	keypoints: np.ndarray | None = None,
 ) -> "torch.Tensor":
 	"""Segment, clean, resize, and convert an image into an encoder tensor."""
 
 	import torch
 
-	clean = segment_and_clean(image, segmenter=segmenter)
+	clean = segment_and_clean(image, segmenter=segmenter, box=box, keypoints=keypoints)
 	clean_rgb = cv2.cvtColor(clean, cv2.COLOR_BGR2RGB)
 	return torch.from_numpy(clean_rgb).permute(2, 0, 1).unsqueeze(0).float() / 255.0
 
@@ -326,10 +357,44 @@ def enhance(image: np.ndarray) -> np.ndarray:
 	return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
 
 
-def normalize_pose(image: np.ndarray) -> np.ndarray:
-	"""Normalize pose by resizing to a fixed size."""
+def normalize_pose(
+	image: np.ndarray,
+	*,
+	keypoints: np.ndarray | None = None,
+	canonical_size: CanonicalSize = CANONICAL_TEMPLATE_SIZE,
+) -> np.ndarray:
+	"""Normalize pose to the canonical side-view template.
 
-	return cv2.resize(image, (256, 256))
+	When 12 anatomical keypoints are supplied, the image is warped toward the
+	canonical template using an affine transform. Without keypoints, this falls
+	back to a deterministic resize to the same canonical dimensions.
+	"""
+
+	width, height = canonical_size
+	if keypoints is None:
+		return cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+
+	points = np.asarray(keypoints, dtype=np.float32).reshape(-1, 2)
+	if points.shape[0] != CANONICAL_SIDE_VIEW_KEYPOINTS.shape[0]:
+		raise ValueError("keypoints must contain 12 anatomical points")
+
+	target = CANONICAL_SIDE_VIEW_KEYPOINTS.copy()
+	target[:, 0] *= width
+	target[:, 1] *= height
+
+	transform, _ = cv2.estimateAffinePartial2D(points, target, method=cv2.LMEDS)
+	if transform is None:
+		LOGGER.warning("Pose normalization failed; falling back to canonical resize")
+		return cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
+
+	return cv2.warpAffine(
+		image,
+		transform,
+		(width, height),
+		flags=cv2.INTER_LINEAR,
+		borderMode=cv2.BORDER_CONSTANT,
+		borderValue=IMAGENET_MEAN_BGR,
+	)
 
 
 def extract_patches(image: np.ndarray) -> dict[str, np.ndarray]:
@@ -354,9 +419,10 @@ def process_image(
 	image: np.ndarray,
 	*,
 	segmenter: ZebraSegmenter | None = None,
+	keypoints: np.ndarray | None = None,
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
 	"""Run the full preprocessing pipeline and return normalized image + patches."""
 
-	normalized = segment_and_clean(image, segmenter=segmenter)
+	normalized = segment_and_clean(image, segmenter=segmenter, keypoints=keypoints)
 	patches = extract_patches(normalized)
 	return normalized, patches
