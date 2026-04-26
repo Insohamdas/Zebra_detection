@@ -13,7 +13,9 @@ COPY pyproject.toml ./
 COPY zebraid/ ./zebraid/
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e . \
+    -f https://download.pytorch.org/whl/torch_stable.html \
+    torch==2.11.0+cpu torchvision==0.26.0+cpu
 
 # Set environment variables
 ENV KMP_DUPLICATE_LIB_OK=TRUE
