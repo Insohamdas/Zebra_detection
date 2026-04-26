@@ -14,7 +14,7 @@ COPY zebraid/ ./zebraid/
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -e . \
-    -f https://download.pytorch.org/whl/torch_stable.html \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
     torch==2.11.0+cpu torchvision==0.26.0+cpu
 
 # Set environment variables
