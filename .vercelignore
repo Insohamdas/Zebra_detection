@@ -1,0 +1,7 @@
+pyproject.toml
+zebraid/
+tests/
+Dockerfile
+data/
+.pytest_cache/
+.venv/
