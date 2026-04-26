@@ -31,6 +31,7 @@ _engine: MatchingEngine | None = None
 _encoder: FeatureEncoder | None = None
 _segmenter: ZebraSegmenter | None = None
 _flank_classifier: FlankClassifier | None = None
+_detector = None
 
 
 class IdentificationResponse(BaseModel):
@@ -41,12 +42,12 @@ class IdentificationResponse(BaseModel):
     is_new: bool
 
 
-def get_pipeline() -> tuple[FaissStore, MatchingEngine, FeatureEncoder, ZebraSegmenter, FlankClassifier]:
+def get_pipeline():
     """Get or initialize the identification pipeline.
     
     Lazily initializes the pipeline on first request.
     """
-    global _registry, _engine, _encoder, _segmenter, _flank_classifier
+    global _registry, _engine, _encoder, _segmenter, _flank_classifier, _detector
     
     if _registry is None:
         registry_path = os.getenv("REGISTRY_PATH", None)
@@ -55,8 +56,10 @@ def get_pipeline() -> tuple[FaissStore, MatchingEngine, FeatureEncoder, ZebraSeg
         _encoder = FeatureEncoder()
         _segmenter = ZebraSegmenter(backend="sam")
         _flank_classifier = FlankClassifier()
+        from zebraid.preprocessing.detector import ZebraDetector
+        _detector = ZebraDetector()
     
-    return _registry, _engine, _encoder, _segmenter, _flank_classifier
+    return _registry, _engine, _encoder, _segmenter, _flank_classifier, _detector
 
 
 def create_app() -> FastAPI:
@@ -126,7 +129,11 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=422, detail="low_quality")
 
             # Get pipeline components
-            registry, engine, encoder, segmenter, flank_classifier = get_pipeline()
+            registry, engine, encoder, segmenter, flank_classifier, detector = get_pipeline()
+
+            # Detect zebras
+            if not detector.detect(frame):
+                raise HTTPException(status_code=400, detail="no_zebra")
 
             # Segment, clean, and convert to tensor before encoding.
             frame_tensor = prepare_tensor(frame, segmenter=segmenter)

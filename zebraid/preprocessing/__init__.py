@@ -11,9 +11,11 @@ from .pipeline import (
 	process_image,
 	segment_and_clean,
 )
+from .detector import ZebraDetector
 
 __all__ = [
 	"ZebraSegmenter",
+	"ZebraDetector",
 	"apply_mask",
 	"enhance",
 	"extract_patches",

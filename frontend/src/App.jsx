@@ -225,7 +225,11 @@ function App() {
               <AlertCircle size={48} color="var(--danger)" style={{ margin: '0 auto 1.5rem' }} />
               <h2 className="heading-xl" style={{ fontSize: '2rem' }}>Analysis Failed</h2>
               <p style={{ color: 'var(--text-muted)', marginBottom: '2rem' }}>
-                {error === 'low_quality' ? 'The image quality is too low for accurate identification. Please ensure the image is sharp and the subject is clearly visible.' : error}
+                {error === 'low_quality' 
+                  ? 'The image quality is too low for accurate identification. Please ensure the image is sharp and the subject is clearly visible.' 
+                  : error === 'no_zebra'
+                  ? 'No zebra was detected in this image. Please upload a clear picture of a zebra.'
+                  : error}
               </p>
               <button className="btn-primary" onClick={resetState}>
                 Try Again
