@@ -1,97 +1,40 @@
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
+.build/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# Virtual Environment
+# Virtual environments
 .venv/
 venv/
 ENV/
 env/
 
-# IDEs
+# Editor / OS
 .vscode/
 .idea/
+.DS_Store
 *.swp
 *.swo
 *~
-.DS_Store
 
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Environment variables
+# Environment files
 .env
 .env.local
 
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-*.cover
+# Data acquisition outputs
+data/raw/
+data/interim/
+data/processed/
 
-# YOLO outputs (keep structure, ignore training outputs)
-runs/detect/*/
-!runs/detect/train4/weights/best.pt
-
-# Large data files (optional - uncomment if not tracking in git)
-# datasets/
-# crops/
-# embeddings.csv
-# zebra.index
-# zebra.db
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# Thumbnails
-._*
-
-# Files that might appear in the root of a volume
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-
-# Directories potentially created on remote AFP share
-.AppleDB
-.AppleDesktop
-Network Trash Folder
-Temporary Items
-.apdisk
-
-# Model weights (keep only best.pt)
-*.pt
-!yolov8n.pt
-!runs/detect/train4/weights/best.pt
-
-# Logs
+# Local logs and temp files
 *.log
 logs/
-
-# Temporary files
 tmp/
 temp/
-*.tmp

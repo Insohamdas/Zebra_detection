@@ -1,3 +1,167 @@
+# ZEBRAID
+
+ZEBRAID is a zebra detection and re-identification system built as a modular Python project.
+
+## Phase 0 scope
+
+- Single species: zebra
+- Single viewpoint: left side
+- Keep the first implementation narrow, testable, and easy to deploy
+
+## Core stack
+
+- Python
+- PyTorch
+- OpenCV
+- FastAPI
+- FAISS
+
+## Package layout
+
+```text
+zebraid/
+├── data/
+├── preprocessing/
+├── segmentation/
+├── feature_engine/
+├── id_generator/
+├── registry/
+├── matching/
+├── api/
+└── experiments/
+```
+
+## What lives where
+
+- `data/` - dataset and asset helpers
+- `preprocessing/` - crop extraction, resizing, normalization
+- `segmentation/` - mask and region logic
+- `feature_engine/` - embeddings and feature transforms
+- `id_generator/` - identity policy and ID creation
+- `registry/` - persistence and metadata storage
+- `matching/` - similarity search and match decisions
+- `api/` - FastAPI routes and service startup
+- `experiments/` - notebooks, trials, and evaluation scripts
+
+## Quick start
+
+1. Create or activate the virtual environment.
+2. Install dependencies from `pyproject.toml`.
+3. Run the API:
+
+```bash
+zebraid-api
+# or
+uvicorn zebraid.api.app:app --reload
+```
+
+## Current foundation
+
+Phase 0 currently provides:
+
+- the package scaffold
+- a minimal FastAPI app with `/health`
+- a lightweight root route for smoke tests
+- a smoke test for the API
+
+## Phase 1 data acquisition
+
+Phase 1 now prioritizes a CCTV-first path for direct identification and ID generation.
+Camera-trap and public datasets are still useful for bootstrapping and regression tests.
+
+### Manifest schema
+
+Each image record follows the canonical schema:
+
+```json
+{
+  "image_id": "IMG_001",
+  "gps": "-2.345,34.123",
+  "timestamp": "2026-04-22T12:34:56Z",
+  "side": "left",
+  "quality_score": 0.91
+}
+```
+
+### Pipeline steps
+
+- collect raw images from a source directory or dataset export
+- standardize metadata into a CSV, JSON, or JSONL manifest
+- validate the schema with `ZebraDataRecord`
+- load images with `ZebraDataLoader`
+- resize to `512x512`
+- normalize pixel values to `float32` in the `[0, 1]` range
+- reject blurry, dark, or low-contrast frames before training
+
+### CCTV live path
+
+The production path is live CCTV ingestion:
+
+1. read frames from a camera index or RTSP URL
+2. sample frames at a configurable stride
+3. apply quality filtering to suppress motion blur and dark frames
+4. pass accepted frames to the identification model/registry
+5. reuse a known zebra ID or generate a new one for first-time sightings
+
+Example:
+
+```python
+from zebraid.data.stream import CCTVStreamConfig, VideoCaptureStreamSource
+from zebraid.pipelines.live_identification import LiveIdentificationPipeline
+
+stream = VideoCaptureStreamSource(CCTVStreamConfig(source="rtsp://camera.local/stream"))
+pipeline = LiveIdentificationPipeline(stream)
+
+for result in pipeline.run():
+  print(result.zebra_id, result.is_new, result.frame.timestamp)
+```
+
+### Test with pre-recorded forest video
+
+Use the same live pipeline on a saved video file:
+
+```bash
+zebraid-test-video --video /path/to/forest.mp4 --mode mock-identify --frame-stride 5 --max-frames 200 --json
+```
+
+Notes:
+
+- `mock-identify` gives stable pseudo IDs for pipeline testing.
+- `quality-only` tests filtering + ID generation flow without matching.
+- This path uses the same stream ingestion and quality gate as CCTV.
+
+### Example
+
+```python
+from zebraid.data import build_path_resolver, load_manifest, ZebraDataLoader
+
+records = load_manifest("data/manifests/serengeti.jsonl")
+loader = ZebraDataLoader(
+    records,
+    build_path_resolver("data/raw/serengeti"),
+)
+
+samples = loader.load_all()
+```
+
+## Bulk image download
+
+To collect a few hundred zebra side-view images for bootstrapping, use the bundled crawler:
+
+```bash
+zebraid-download-images --keyword "zebra side view" --max-num 500 --output-dir data/raw/zebra_side_view
+```
+
+Tips:
+
+- Start with 300–500 images and inspect the results manually.
+- Prefer licensed or public-domain sources when possible.
+- Use `--engine bing` if Google rate-limits the crawl.
+- Browser extensions such as image downloaders can work too, but they need more manual cleanup.
+
+## Next milestone
+
+Migrate one pipeline module at a time into the new package layout.
 # Zebra Detection & Re-Identification System
 
 Complete end-to-end pipeline for zebra detection, cropping, embedding extraction, and individual re-identification using YOLO + ResNet50 + FAISS.
@@ -93,7 +257,6 @@ Zebra_detection/
 ├── test_matcher.py         # Standalone test script ✅
 ├── test_api.sh             # API test script ✅
 ├── API_DOCUMENTATION.md    # Complete API docs ✅
-├── API_COMPLETE.md         # API completion summary ✅
 ├── MATCHING_DEMO.md        # Detailed documentation ✅
 └── data.yaml               # YOLO dataset config
 ```
@@ -292,4 +455,3 @@ python scripts/app.py
 - `README.md` - This file
 - `API_DOCUMENTATION.md` - Complete API reference
 - `MATCHING_DEMO.md` - Matching system details
-- `API_COMPLETE.md` - API completion summary
