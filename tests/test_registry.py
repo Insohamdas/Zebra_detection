@@ -37,7 +37,7 @@ def test_faiss_store_add_multiple_embeddings():
 
 
 def test_faiss_store_search_returns_correct_type():
-    """Test search returns tuple of (zebra_id, distance)."""
+    """Test search returns tuple of (zebra_id, cosine_similarity)."""
     store = FaissStore(embedding_dim=2048)
     embedding = np.array([1.0] * 2048, dtype=np.float32)
     
@@ -48,11 +48,11 @@ def test_faiss_store_search_returns_correct_type():
     assert isinstance(zebra_id, str)
     assert zebra_id == "zebra_001"
     assert isinstance(distance, (float, np.floating))
-    assert distance >= 0  # L2 distance is always non-negative
+    assert 0.0 <= distance <= 1.0
 
 
 def test_faiss_store_search_exact_match():
-    """Test searching for identical embedding returns zero distance."""
+    """Test searching for identical embedding returns cosine similarity near one."""
     store = FaissStore(embedding_dim=2048)
     embedding = np.array([1.0, 2.0, 3.0] + [0.0] * 2045, dtype=np.float32)
     
@@ -61,7 +61,7 @@ def test_faiss_store_search_exact_match():
     zebra_id, distance = store.search(embedding)
     
     assert zebra_id == "zebra_exact"
-    assert distance < 1e-5  # Should be near zero for exact match
+    assert distance > 0.99
 
 
 def test_faiss_store_search_nearest_neighbor():
@@ -85,10 +85,11 @@ def test_faiss_store_search_nearest_neighbor():
 def test_faiss_store_search_finds_all_entries():
     """Test that each added embedding can be found as nearest neighbor."""
     store = FaissStore(embedding_dim=2048)
-    embeddings = [
-        np.array([float(i)] + [0.0] * 2047, dtype=np.float32)
-        for i in range(5)
-    ]
+    embeddings = []
+    for i in range(5):
+        embedding = np.zeros(2048, dtype=np.float32)
+        embedding[i] = 1.0
+        embeddings.append(embedding)
     zebra_ids = [f"zebra_{i:03d}" for i in range(5)]
     
     for embedding, zebra_id in zip(embeddings, zebra_ids):
@@ -98,7 +99,7 @@ def test_faiss_store_search_finds_all_entries():
     for embedding, expected_id in zip(embeddings, zebra_ids):
         found_id, distance = store.search(embedding)
         assert found_id == expected_id
-        assert distance < 1e-5
+        assert distance > 0.99
 
 
 def test_faiss_store_with_custom_dimension():

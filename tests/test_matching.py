@@ -75,22 +75,23 @@ def test_matching_engine_match_with_confidence(engine):
 
 def test_matching_engine_confidence_calibration(engine):
     """Test that confidence scoring properly maps cosine domain [-1, 1] to [0, 1]."""
-    # Create base embedding and add
     base = np.array([1.0] + [0.0] * 159, dtype=np.float32)
-    engine.add_zebra(base, "zebra_base", flank="left")
-    
-    # 1. Exact match (cosine = 1.0) -> confidence = 1.0
-    _, conf_exact, _ = engine.match_with_confidence(base, flank="left")
+
+    exact_engine = MatchingEngine(registry=FaissStore(embedding_dim=160), similarity_threshold=0.75)
+    exact_engine.add_zebra(base, "zebra_base", flank="left")
+    _, conf_exact, _ = exact_engine.match_with_confidence(base, flank="left")
     assert conf_exact > 0.99
     
-    # 2. Orthogonal match (cosine = 0.0) -> confidence = 0.5
     orthogonal = np.array([0.0, 1.0] + [0.0] * 158, dtype=np.float32)
-    _, conf_ortho, _ = engine.match_with_confidence(orthogonal, flank="left")
+    ortho_engine = MatchingEngine(registry=FaissStore(embedding_dim=160), similarity_threshold=0.75)
+    ortho_engine.add_zebra(base, "zebra_base", flank="left")
+    _, conf_ortho, _ = ortho_engine.match_with_confidence(orthogonal, flank="left")
     assert 0.49 < conf_ortho < 0.51
     
-    # 3. Opposite match (cosine = -1.0) -> confidence = 0.0
     opposite = np.array([-1.0] + [0.0] * 159, dtype=np.float32)
-    _, conf_opp, _ = engine.match_with_confidence(opposite, flank="left")
+    opp_engine = MatchingEngine(registry=FaissStore(embedding_dim=160), similarity_threshold=0.75)
+    opp_engine.add_zebra(base, "zebra_base", flank="left")
+    _, conf_opp, _ = opp_engine.match_with_confidence(opposite, flank="left")
     assert conf_opp < 0.01
 
 
@@ -257,3 +258,48 @@ def test_temporal_drift_flag_on_hamming_change(engine):
 
     assert is_new is False
     assert engine.registry.drift_flags["left"]["zebra_drift"] is True
+
+
+def test_resolve_three_phase_identity_enrolls_when_no_code_match(registry):
+    engine = MatchingEngine(registry=registry, similarity_threshold=0.75)
+    embedding = np.array([1.0, 0.0] + [0.0] * 158, dtype=np.float32)
+    global_code = np.ones(512, dtype=np.uint8)
+
+    zebra_id, confidence, is_new, phase = engine.resolve_three_phase_identity(
+        embedding,
+        global_code=global_code,
+        flank="left",
+        stripe_stats=np.ones(18, dtype=np.float32),
+    )
+
+    assert zebra_id.startswith("ZEB-")
+    assert confidence == 1.0
+    assert is_new is True
+    assert phase == "enroll"
+
+
+def test_resolve_three_phase_identity_matches_existing_by_hamming(registry):
+    engine = MatchingEngine(registry=registry, similarity_threshold=0.75)
+    base = np.array([1.0, 0.0] + [0.0] * 158, dtype=np.float32)
+    query = np.array([0.9, 0.1] + [0.0] * 158, dtype=np.float32)
+    code = np.zeros(512, dtype=np.uint8)
+    local_codes = {
+        "shoulder": np.zeros(128, dtype=np.uint8),
+        "torso": np.zeros(128, dtype=np.uint8),
+        "neck": np.zeros(64, dtype=np.uint8),
+    }
+
+    engine.registry.add(base, "zebra_code_match", flank="left", global_code=code, local_codes=local_codes)
+
+    zebra_id, confidence, is_new, phase = engine.resolve_three_phase_identity(
+        query,
+        global_code=code,
+        local_codes=local_codes,
+        flank="left",
+        stripe_stats=np.zeros(18, dtype=np.float32),
+    )
+
+    assert zebra_id == "zebra_code_match"
+    assert confidence > 0.99
+    assert is_new is False
+    assert phase in {"hamming", "local_refine"}

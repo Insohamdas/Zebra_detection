@@ -9,6 +9,7 @@ from typing import Literal
 
 import cv2
 import numpy as np
+import logging
 
 
 LOGGER = logging.getLogger(__name__)
@@ -76,6 +77,44 @@ def _default_device() -> str:
 		pass
 
 	return "cpu"
+
+
+def load_hrnet_keypoint_detector(checkpoint_path: str | None = None):
+	"""Attempt to load an HRNet keypoint detector (returns callable or None).
+
+	The returned callable has signature (image: np.ndarray, box: np.ndarray|None) -> np.ndarray[12,2]
+	If no supported backend is available, returns None and logs a warning.
+	"""
+	# Try common HRNet/MMPose backends
+	try:
+		# Try mmpose inference (if installed)
+		from mmpose.apis import init_pose_model, inference_top_down_pose_model  # type: ignore
+
+		def _mmpose_detector(image: np.ndarray, box: np.ndarray | None = None) -> np.ndarray | None:
+			model_cfg = checkpoint_path if checkpoint_path else None
+			# initialize per-call to avoid holding GPU model in memory unless user provides a persistent model
+			model = init_pose_model(model_cfg, checkpoint_path) if model_cfg else None
+			if model is None:
+				return None
+			bboxes = None
+			if box is not None:
+				x1, y1, x2, y2 = [int(v) for v in box]
+				bboxes = np.array([[x1, y1, x2, y2]], dtype=np.float32)
+			result = inference_top_down_pose_model(model, image, bboxes)
+			if not result:
+				return None
+			# Convert result to 12 keypoints expectation by selecting or interpolating
+			keypoints = np.zeros((12, 2), dtype=np.float32)
+			# take first up to 12 from result[0]['keypoints'] if available
+			kps = result[0].get('keypoints', [])
+			for i in range(min(12, len(kps))):
+				keypoints[i] = kps[i][:2]
+			return keypoints
+
+		return _mmpose_detector
+	except Exception:
+		LOGGER.warning("HRNet/MMPose not available; keypoint detection disabled.")
+		return None
 
 
 def _fallback_segmenter() -> Callable[[np.ndarray, np.ndarray | None], np.ndarray]:
@@ -176,7 +215,7 @@ def load_sam_model(
 	*,
 	backend: SegmentationBackend = "otsu",
 	checkpoint_path: str | None = None,
-	model_type: str = "vit_b",
+	model_type: str = "vit_h",
 	device: str | None = None,
 	fallback_to_otsu: bool = True,
 ) -> Callable[[np.ndarray, np.ndarray | None], np.ndarray]:
@@ -289,8 +328,6 @@ def segment_and_clean(
 	try:
 		mask = segmenter.segment(image_bgr, box=box)
 	except TypeError:
-		if box is not None:
-			raise
 		mask = segmenter.segment(image_bgr)
 
 	if mask is None or not np.any(mask):
@@ -378,6 +415,12 @@ def normalize_pose(
 	if points.shape[0] != CANONICAL_SIDE_VIEW_KEYPOINTS.shape[0]:
 		raise ValueError("keypoints must contain 12 anatomical points")
 
+	# Prefer thin-plate-spline warp when available for more flexible pose normalization
+	try:
+		return normalize_pose_tps(image, points, (width, height))
+	except Exception:
+		LOGGER.debug("TPS normalization unavailable or failed; falling back to affine")
+
 	target = CANONICAL_SIDE_VIEW_KEYPOINTS.copy()
 	target[:, 0] *= width
 	target[:, 1] *= height
@@ -395,6 +438,33 @@ def normalize_pose(
 		borderMode=cv2.BORDER_CONSTANT,
 		borderValue=IMAGENET_MEAN_BGR,
 	)
+
+
+def normalize_pose_tps(image: np.ndarray, points: np.ndarray, out_size: CanonicalSize) -> np.ndarray:
+	"""Normalize pose using a thin-plate-spline warp from detected keypoints to canonical template.
+
+	Attempts to use OpenCV's Thin Plate Spline transformer when available; raises on failure so
+	callers can fallback to affine transforms.
+	"""
+	try:
+		# OpenCV's shape transformer API can perform TPS warps when compiled with contrib modules.
+		transformer = cv2.createThinPlateSplineShapeTransformer()
+	except Exception as exc:
+		raise RuntimeError("Thin-plate-spline not available in this OpenCV build") from exc
+
+	src = points.astype(np.float32)
+	# target in pixel coordinates
+	width, height = out_size
+	dst = (CANONICAL_SIDE_VIEW_KEYPOINTS.copy() * np.array([width, height], dtype=np.float32)).astype(np.float32)
+
+	matches = [cv2.DMatch(i, i, 0) for i in range(len(src))]
+	src_pts = src.reshape(-1, 1, 2)
+	dst_pts = dst.reshape(-1, 1, 2)
+	transformer.estimateTransformation(dst_pts, src_pts, matches)
+
+	warped = transformer.warpImage(image, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=IMAGENET_MEAN_BGR)
+	warped_resized = cv2.resize(warped, (width, height), interpolation=cv2.INTER_AREA)
+	return warped_resized
 
 
 def extract_patches(image: np.ndarray) -> dict[str, np.ndarray]:

@@ -406,7 +406,7 @@ class PersistentFaissStore:
         from zebraid.id_generator import generate_code
         
         zebra_id = generate_code(embedding, stripe_stats=stripe_stats)
-        if zebra_id in self.flank_ids.get(flank, []):
+        if zebra_id in self.flank_ids.get("left", []) or zebra_id in self.flank_ids.get("right", []):
             zebra_id = f"{zebra_id}-{len(self.flank_ids[flank]) + 1:02d}"
         
         # Add embedding with this ID and flank
@@ -557,6 +557,18 @@ class PersistentFaissStore:
     def ntotal(self) -> int:
         """Total number of embeddings across all indices."""
         return sum(idx.ntotal for idx in self.indices.values())
+
+    @property
+    def index(self):
+        """Backward-compatible alias for the primary left-flank FAISS index."""
+
+        return self.indices["left"]
+
+    @property
+    def ids(self) -> list[str]:
+        """Backward-compatible alias for left-flank zebra IDs."""
+
+        return self.flank_ids["left"]
     
     def save(self) -> None:
         """Save indices and metadata to disk."""

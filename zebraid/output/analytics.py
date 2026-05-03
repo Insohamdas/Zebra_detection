@@ -74,7 +74,10 @@ def get_population_summary(registry: PersistentFaissStore) -> dict[str, int | fl
     """
     if hasattr(registry, 'get_stats'):
         # Use built-in stats for persistent registry
-        return registry.get_stats()
+        stats = registry.get_stats()
+        if "total_embeddings" not in stats:
+            stats["total_embeddings"] = stats.get("total_index_size", stats.get("index_size", 0))
+        return stats
     else:
         total = registry.ntotal if hasattr(registry, 'ntotal') else 0
         all_ids = []

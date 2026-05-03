@@ -23,7 +23,8 @@ class MatchingEngine:
     def __init__(
         self,
         registry: FaissStore,
-        similarity_threshold: float = 0.75,
+        similarity_threshold: float | None = None,
+        distance_threshold: float | None = None,
         drift_hamming_threshold: float = 0.35,
     ):
         """Initialize matching engine with a registry store.
@@ -33,8 +34,22 @@ class MatchingEngine:
             similarity_threshold: Cosine similarity threshold (0-1, default: 0.75)
         """
         self.registry = registry
-        self.similarity_threshold = similarity_threshold
+        if similarity_threshold is None and distance_threshold is None:
+            similarity_threshold = 0.75
+        if similarity_threshold is None:
+            similarity_threshold = float(distance_threshold)
+        self.similarity_threshold = float(similarity_threshold)
         self.drift_hamming_threshold = drift_hamming_threshold
+
+    @property
+    def distance_threshold(self) -> float:
+        """Backward-compatible alias for similarity_threshold."""
+
+        return self.similarity_threshold
+
+    @distance_threshold.setter
+    def distance_threshold(self, value: float) -> None:
+        self.similarity_threshold = float(value)
     
     def match(self, embedding: np.ndarray, flank: str = "left") -> str:
         """Attempt to match an embedding to an existing zebra ID.
@@ -70,6 +85,7 @@ class MatchingEngine:
         embedding: np.ndarray, 
         flank: str = "left",
         ref_image: bytes | None = None,
+        stripe_stats: np.ndarray | None = None,
         global_code: np.ndarray | None = None,
         local_codes: dict[str, np.ndarray] | None = None,
         ssi_profile: np.ndarray | None = None,
@@ -89,6 +105,7 @@ class MatchingEngine:
             embedding,
             flank=flank,
             ref_image=ref_image,
+            stripe_stats=stripe_stats,
             global_code=global_code,
             local_codes=local_codes,
             ssi_profile=ssi_profile,
@@ -103,6 +120,7 @@ class MatchingEngine:
         frame_id: str | None = None,
         quality_score: float | None = None,
         ref_image: bytes | None = None,
+        stripe_stats: np.ndarray | None = None,
         global_code: np.ndarray | None = None,
         local_codes: dict[str, np.ndarray] | None = None,
         ssi_profile: np.ndarray | None = None,
@@ -131,6 +149,7 @@ class MatchingEngine:
                 embedding,
                 flank=flank,
                 ref_image=ref_image,
+                stripe_stats=stripe_stats,
                 global_code=global_code,
                 local_codes=local_codes,
                 ssi_profile=ssi_profile,
@@ -161,6 +180,7 @@ class MatchingEngine:
                     embedding,
                     flank=flank,
                     ref_image=ref_image,
+                    stripe_stats=stripe_stats,
                     global_code=global_code,
                     local_codes=local_codes,
                     ssi_profile=ssi_profile,
@@ -182,6 +202,111 @@ class MatchingEngine:
         log.info(json.dumps(decision))
 
         return zebra_id, confidence, is_new
+
+    def resolve_three_phase_identity(
+        self,
+        embedding: np.ndarray,
+        *,
+        global_code: np.ndarray,
+        local_codes: dict[str, np.ndarray] | None = None,
+        flank: str = "left",
+        stripe_stats: np.ndarray | None = None,
+        coarse_k: int = 20,
+        hamming_k: int = 5,
+        borderline_hamming: float = 0.20,
+        frame_id: str | None = None,
+        quality_score: float | None = None,
+        ref_image: bytes | None = None,
+        ssi_profile: np.ndarray | None = None,
+    ) -> tuple[str, float, bool, str]:
+        """Resolve an identity using coarse FAISS -> Hamming -> optional local refinement.
+
+        Returns ``(zebra_id, confidence, is_new, phase)`` where phase is one of
+        ``enroll``, ``hamming``, or ``local_refine``.
+        """
+
+        if self.registry.indices[flank].ntotal == 0:
+            zebra_id = self._create_new_id(
+                embedding,
+                flank=flank,
+                ref_image=ref_image,
+                stripe_stats=stripe_stats,
+                global_code=global_code,
+                local_codes=local_codes,
+                ssi_profile=ssi_profile,
+            )
+            return zebra_id, 1.0, True, "enroll"
+
+        candidates = self.registry.search_candidates(embedding, flank=flank, k=coarse_k)
+        if not candidates:
+            zebra_id = self._create_new_id(
+                embedding,
+                flank=flank,
+                ref_image=ref_image,
+                stripe_stats=stripe_stats,
+                global_code=global_code,
+                local_codes=local_codes,
+                ssi_profile=ssi_profile,
+            )
+            return zebra_id, 1.0, True, "enroll"
+
+        candidate_ids = [zebra_id for zebra_id, _ in candidates]
+        hamming_matches = self.registry.hamming_search(
+            global_code,
+            flank=flank,
+            candidate_ids=candidate_ids,
+            k=hamming_k,
+        )
+
+        if not hamming_matches:
+            zebra_id = self._create_new_id(
+                embedding,
+                flank=flank,
+                ref_image=ref_image,
+                stripe_stats=stripe_stats,
+                global_code=global_code,
+                local_codes=local_codes,
+                ssi_profile=ssi_profile,
+            )
+            return zebra_id, 1.0, True, "enroll"
+
+        best_id, best_hamming = hamming_matches[0]
+        phase = "hamming"
+
+        if local_codes and best_hamming <= borderline_hamming:
+            refined = self.registry.local_refine(
+                local_codes,
+                [zebra_id for zebra_id, _ in hamming_matches],
+                flank=flank,
+            )
+            if refined:
+                refined_id, refined_distance = refined[0]
+                if refined_distance <= borderline_hamming:
+                    best_id = refined_id
+                    best_hamming = refined_distance
+                    phase = "local_refine"
+
+        if best_hamming <= borderline_hamming:
+            self.registry.update_embedding(
+                best_id,
+                embedding,
+                flank=flank,
+                alpha=0.1,
+                global_code=global_code,
+            )
+            confidence = float(np.clip(1.0 - best_hamming, 0.0, 1.0))
+            return best_id, confidence, False, phase
+
+        zebra_id = self._create_new_id(
+            embedding,
+            flank=flank,
+            ref_image=ref_image,
+            stripe_stats=stripe_stats,
+            global_code=global_code,
+            local_codes=local_codes,
+            ssi_profile=ssi_profile,
+        )
+        return zebra_id, 1.0, True, "enroll"
 
     def match_three_phase(
         self,

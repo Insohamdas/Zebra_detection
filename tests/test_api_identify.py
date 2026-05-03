@@ -11,6 +11,11 @@ from zebraid.api.app import create_app
 @pytest.fixture
 def client():
     """Create a FastAPI test client."""
+    import os
+
+    # Enable fast mock mode for most tests to avoid heavy ML dependencies
+    os.environ.setdefault("IDENTIFY_MOCK", "1")
+
     app = create_app()
     return TestClient(app)
 
@@ -33,8 +38,8 @@ def test_identify_endpoint_with_valid_image(client):
     """Test /identify endpoint with a valid image."""
     # Create a simple test image (100x100 RGB)
     import cv2
-
-    image = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+    # Use minimum required resolution (>=5MP)
+    image = np.random.randint(0, 256, (2000, 2560, 3), dtype=np.uint8)
     success, encoded_image = cv2.imencode(".jpg", image)
     assert success
 
@@ -59,8 +64,7 @@ def test_identify_endpoint_with_valid_image(client):
 def test_identify_endpoint_with_png(client):
     """Test /identify endpoint with PNG image."""
     import cv2
-
-    image = np.ones((100, 100, 3), dtype=np.uint8) * 128
+    image = np.ones((2000, 2560, 3), dtype=np.uint8) * 128
     success, encoded_image = cv2.imencode(".png", image)
     assert success
 
@@ -78,13 +82,24 @@ def test_identify_endpoint_with_png(client):
 
 def test_identify_endpoint_invalid_image(client):
     """Test /identify endpoint with invalid image data."""
-    response = client.post(
-        "/identify",
-        files={"image": ("test.jpg", b"not an image", "image/jpeg")},
-    )
+    # Create a client without IDENTIFY_MOCK so decoding is exercised
+    import os
+    orig = os.environ.pop("IDENTIFY_MOCK", None)
+    try:
+        app = create_app()
+        from fastapi.testclient import TestClient as TC
 
-    assert response.status_code == 400
-    assert "Could not decode image" in response.json()["detail"]
+        no_mock_client = TC(app)
+        response = no_mock_client.post(
+            "/identify",
+            files={"image": ("test.jpg", b"not an image", "image/jpeg")},
+        )
+
+        assert response.status_code == 400
+        assert "Could not decode image" in response.json()["detail"]
+    finally:
+        if orig is not None:
+            os.environ["IDENTIFY_MOCK"] = orig
 
 
 def test_identify_endpoint_missing_file(client):
@@ -99,8 +114,8 @@ def test_identify_endpoint_multiple_calls_different_images(client):
     import cv2
 
     # Create two distinct images
-    image1 = np.ones((100, 100, 3), dtype=np.uint8) * 50
-    image2 = np.ones((100, 100, 3), dtype=np.uint8) * 200
+    image1 = np.ones((2000, 2560, 3), dtype=np.uint8) * 50
+    image2 = np.ones((2000, 2560, 3), dtype=np.uint8) * 200
 
     _, img1_encoded = cv2.imencode(".jpg", image1)
     _, img2_encoded = cv2.imencode(".jpg", image2)
@@ -129,8 +144,7 @@ def test_identify_endpoint_multiple_calls_different_images(client):
 def test_identify_response_schema(client):
     """Test that /identify response matches IdentificationResponse schema."""
     import cv2
-
-    image = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+    image = np.random.randint(0, 256, (2000, 2560, 3), dtype=np.uint8)
     _, encoded_image = cv2.imencode(".jpg", image)
 
     response = client.post(

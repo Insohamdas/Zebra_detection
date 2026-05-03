@@ -32,7 +32,7 @@ def test_same_zebra_same_id(engine):
     zebra_id_2, distance_2, is_new_2 = engine.match_with_confidence(embedding_a)
     assert is_new_2 is False  # Should match existing
     assert zebra_id_2 == zebra_id_1  # Same ID!
-    assert distance_2 < 1e-5  # Exact match
+    assert distance_2 > 0.99  # Exact match confidence
 
 
 def test_different_zebra_different_id(engine):
@@ -76,7 +76,7 @@ def test_occluded_still_matches(engine):
     # Should match the original with small distance
     assert is_new_occluded is False
     assert zebra_id_occluded == zebra_id_original
-    assert distance_occluded < 0.5  # Within threshold
+    assert distance_occluded > 0.75  # High confidence for near-match
 
 
 def test_multiple_observations_same_zebra(engine):
@@ -132,8 +132,8 @@ def test_population_count_single_zebra(engine):
 def test_population_count_multiple_zebras(engine):
     """Test: Population count with multiple distinct zebras."""
     for i in range(5):
-        # Create distinct embeddings (far apart)
-        embedding = np.ones(2048, dtype=np.float32) * (i * 10)
+        embedding = np.zeros(2048, dtype=np.float32)
+        embedding[i] = 1.0
         engine.match(embedding)
     
     population = count_population(engine.registry)
@@ -186,14 +186,14 @@ def test_distance_affected_by_dimension(registry):
     # Create two embeddings with small per-dimension difference
     # In 2048D, small differences accumulate
     base = np.zeros(2048, dtype=np.float32)
-    perturbed = base + 0.01  # Add 0.01 to all dimensions
+    base[0] = 1.0
+    perturbed = base + 0.01  # Small perturbation to all dimensions
     
-    # L2 distance: sqrt(2048 * 0.01^2) ≈ 0.143 < 0.5, should match
     engine.match(base)
     
     zebra_id, distance, is_new = engine.match_with_confidence(perturbed)
     
-    assert distance < 0.5
+    assert distance > 0.75
     assert is_new is False  # Should match
 
 

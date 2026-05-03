@@ -8,7 +8,7 @@ def test_debug_shapes():
     import io
 
     client = TestClient(app)
-    image = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+    image = np.random.randint(0, 256, (2000, 2560, 3), dtype=np.uint8)
     _, encoded_image = cv2.imencode(".jpg", image)
     image_bytes = io.BytesIO(encoded_image.tobytes())
 

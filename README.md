@@ -60,9 +60,29 @@ uvicorn zebraid.api.app:app --reload
 Phase 0 currently provides:
 
 - the package scaffold
-- a minimal FastAPI app with `/health`
+- a FastAPI app with `/health`, `/identify`, and async `/process-video`
 - a lightweight root route for smoke tests
-- a smoke test for the API
+- unit tests for the image and video API flows
+
+### API contract
+
+- `POST /identify`
+  - accepts a single image upload
+  - supported formats: JPEG, PNG, TIFF, RAW-like camera outputs
+  - minimum resolution: 5 MP
+  - returns one zebra identity with confidence
+
+- `POST /process-video`
+  - accepts MP4, MOV, or AVI uploads
+  - returns a queued job response with a `job_id`
+  - sample cadence: every 15th frame
+  - cap: 100 sampled frames per upload
+
+- `GET /process-video/{job_id}`
+  - polls an async job until completion
+  - returns all unique zebra IDs found in the sequence with their best confidence
+
+Set `IDENTIFY_MOCK=1` for fast deterministic responses during tests or local development.
 
 ## Phase 1 data acquisition
 

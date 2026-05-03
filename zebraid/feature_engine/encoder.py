@@ -31,10 +31,7 @@ class FeatureEncoder:
 
         self.device = torch.device(device)
 
-        try:
-            self.model = resnet50(pretrained=True)
-        except Exception:
-            self.model = resnet50(weights=None)
+        self.model = resnet50(weights=None)
 
         # Re-ID head shape matches the paper target. It is only identity-
         # discriminative once a triplet-loss checkpoint is loaded.

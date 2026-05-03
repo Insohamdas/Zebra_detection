@@ -24,8 +24,7 @@ def test_root_endpoint() -> None:
 
 
 def test_identify_endpoint_uses_segmentation(monkeypatch) -> None:
-    image = np.zeros((96, 144, 3), dtype=np.uint8)
-    image[:, :72] = 255
+    image = np.random.randint(0, 256, (2000, 2560, 3), dtype=np.uint8)
     success, encoded = cv2.imencode(".jpg", image)
     assert success is True
 
@@ -37,7 +36,7 @@ def test_identify_endpoint_uses_segmentation(monkeypatch) -> None:
             self.calls += 1
             assert frame.shape == image.shape
             mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-            mask[:, :72] = 1
+            mask[:, : frame.shape[1] // 2] = 1
             return mask
 
     class DummyEncoder:

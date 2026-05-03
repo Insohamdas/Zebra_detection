@@ -209,3 +209,162 @@ def test_real_identifier_uses_segmenter_before_encoding(registry):
 
     assert result is not None
     assert segmenter.calls == 1
+
+
+def test_real_identifier_forwards_keypoints_to_prepare_tensor(monkeypatch, registry):
+    class DummyEncoder:
+        def encode(self, image_tensor):
+            assert image_tensor.shape == (1, 3, 256, 512)
+            return torch.ones((1, 626), dtype=torch.float32)
+
+    class DummySegmenter:
+        def segment(self, frame, box=None):
+            return np.ones(frame.shape[:2], dtype=np.uint8)
+
+    class DummyDetector:
+        def detect_with_quality(self, frame):
+            return [
+                {
+                    "box": np.array([10, 10, 200, 200], dtype=np.float32),
+                    "rejected": False,
+                    "reject_reasons": [],
+                    "quality": {"blur": 100.0, "entropy": 5.0, "stripe_contrast": 0.7},
+                }
+            ]
+
+    class DummyKeypointDetector:
+        def detect_keypoints(self, frame, box=None):
+            assert box is not None
+            return np.array(
+                [
+                    [8, 38],
+                    [18, 28],
+                    [36, 24],
+                    [54, 22],
+                    [72, 23],
+                    [92, 28],
+                    [128, 38],
+                    [30, 78],
+                    [48, 80],
+                    [72, 80],
+                    [96, 78],
+                    [118, 54],
+                ],
+                dtype=np.float32,
+            )
+
+    class DummyFlankClassifier:
+        def classify(self, frame):
+            return "left"
+
+    prepare_calls = {}
+
+    def fake_prepare_tensor(image, *, segmenter=None, box=None, keypoints=None):
+        prepare_calls["box"] = box
+        prepare_calls["keypoints"] = keypoints
+        return torch.ones((1, 3, 256, 512), dtype=torch.float32)
+
+    monkeypatch.setattr("zebraid.pipelines.real_identify.prepare_tensor", fake_prepare_tensor)
+
+    identifier = create_real_identifier(
+        registry=registry,
+        encoder=DummyEncoder(),
+        segmenter=DummySegmenter(),
+        flank_classifier=DummyFlankClassifier(),
+        detector=DummyDetector(),
+        keypoint_detector=DummyKeypointDetector(),
+    )
+    identifier.matching_engine.match_with_confidence = lambda *args, **kwargs: ("ZEB-KEYPTS", 0.88, False)
+
+    frame = np.random.randint(0, 256, (640, 480, 3), dtype=np.uint8)
+    result = identifier(frame)
+
+    assert isinstance(result, IdentificationCandidate)
+    assert result.zebra_id == "ZEB-KEYPTS"
+    assert prepare_calls["box"].shape == (4,)
+    assert prepare_calls["keypoints"].shape == (12, 2)
+
+
+def test_real_identifier_code_mode_uses_masked_features_and_three_phase_resolution(monkeypatch, registry):
+    class DummyEncoder:
+        def encode_multiscale(self, image_tensor):
+            assert image_tensor.shape == (1, 3, 256, 512)
+            return torch.ones((1, 1024), dtype=torch.float32)
+
+    class DummySegmenter:
+        def segment(self, frame, box=None):
+            return np.ones(frame.shape[:2], dtype=np.uint8)
+
+    class DummyDetector:
+        def best_box(self, frame):
+            return np.array([5, 5, 100, 120], dtype=np.float32)
+
+    class DummyFlankClassifier:
+        def classify(self, frame):
+            return "right"
+
+    class DummySSI:
+        def __init__(self):
+            self.calls = 0
+
+        def transform(self, features):
+            self.calls += 1
+            assert features.shape == (3, 32)
+            return features * 0.5
+
+    captured = {}
+
+    def fake_zone_gabor_features(image):
+        captured["zone_image_shape"] = image.shape
+        return np.arange(96, dtype=np.float32)
+
+    def fake_stripe_stats(image):
+        captured["stats_image_shape"] = image.shape
+        return np.arange(18, dtype=np.float32)
+
+    def fake_global_itq_code(descriptor, binarizer=None):
+        captured["global_descriptor_shape"] = descriptor.shape
+        return np.ones(512, dtype=np.uint8)
+
+    class FakePatchCodes:
+        def __init__(self):
+            self.shoulder = np.zeros(128, dtype=np.uint8)
+            self.torso = np.ones(128, dtype=np.uint8)
+            self.neck = np.ones(64, dtype=np.uint8)
+
+    def fake_local_patch_codes(zone_descriptors, **kwargs):
+        captured["local_zone_shapes"] = {k: np.asarray(v).shape for k, v in zone_descriptors.items()}
+        return FakePatchCodes()
+
+    def fake_resolve_three_phase_identity(*args, **kwargs):
+        captured["resolve_kwargs"] = kwargs
+        return "ZEB-CODE", 0.77, False, "hamming"
+
+    monkeypatch.setattr("zebraid.pipelines.real_identify.zone_gabor_features", fake_zone_gabor_features)
+    monkeypatch.setattr("zebraid.pipelines.real_identify.stripe_zone_stats", fake_stripe_stats)
+    monkeypatch.setattr("zebraid.pipelines.real_identify.global_itq_code", fake_global_itq_code)
+    monkeypatch.setattr("zebraid.pipelines.real_identify.local_patch_codes", fake_local_patch_codes)
+
+    identifier = create_real_identifier(
+        registry=registry,
+        encoder=DummyEncoder(),
+        segmenter=DummySegmenter(),
+        flank_classifier=DummyFlankClassifier(),
+        detector=DummyDetector(),
+        keypoint_detector=None,
+        identity_mode="code",
+        ssi_index=DummySSI(),
+    )
+    identifier.matching_engine.resolve_three_phase_identity = fake_resolve_three_phase_identity
+
+    frame = np.random.randint(0, 256, (640, 480, 3), dtype=np.uint8)
+    result = identifier(frame)
+
+    assert isinstance(result, IdentificationCandidate)
+    assert result.zebra_id == "ZEB-CODE"
+    assert result.confidence == pytest.approx(0.77, rel=1e-6)
+    assert captured["zone_image_shape"] == frame.shape
+    assert captured["stats_image_shape"] == frame.shape
+    assert captured["global_descriptor_shape"] == (1138,)
+    assert captured["local_zone_shapes"] == {"shoulder": (32,), "torso": (32,), "neck": (32,)}
+    assert captured["resolve_kwargs"]["flank"] == "right"
