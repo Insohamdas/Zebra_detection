@@ -182,12 +182,13 @@ def _identify_zebras_in_frame(
         return []
 
     frame_results: list[_FrameIdentification] = []
+    height, width = frame.shape[:2]
     for det_idx, zebra_box in enumerate(zebra_boxes):
         x1, y1, x2, y2 = [int(v) for v in zebra_box]
-        x1 = max(0, min(x1, frame.shape[1] - 1))
-        x2 = max(0, min(x2, frame.shape[1]))
-        y1 = max(0, min(y1, frame.shape[0] - 1))
-        y2 = max(0, min(y2, frame.shape[0]))
+        x1 = max(0, min(x1, width - 1))
+        x2 = max(0, min(x2, width))
+        y1 = max(0, min(y1, height - 1))
+        y2 = max(0, min(y2, height))
         if x2 <= x1 or y2 <= y1:
             continue
         crop = frame[y1:y2, x1:x2]
@@ -543,6 +544,7 @@ def create_app() -> FastAPI:
 
             # Aspect-ratio sanity check (avoid extremely tall/flat images)
             # widened to allow more flexibility
+            height, width = frame.shape[:2]
             aspect = float(width) / float(height) if height > 0 else 0.0
             if aspect <= 0.0 or aspect < 0.1 or aspect > 10.0:
                 raise HTTPException(status_code=422, detail="bad_aspect_ratio")
@@ -632,7 +634,7 @@ def main() -> None:
 
     import uvicorn
 
-    uvicorn.run("zebraid.api.app:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("zebraid.api.app:app", host="0.0.0.0", port=8000, reload=True)
 
 
 if __name__ == "__main__":
