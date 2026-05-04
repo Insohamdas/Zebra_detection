@@ -853,18 +853,16 @@ button {
 /* Loading Overlay */
 /* Premium Loading Overlay */
 .premium-loading-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.90);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  z-index: 20;
-  border-radius: var(--radius-2xl);
-  border: 1px solid rgba(255, 255, 255, 0.4);
+  z-index: 9999;
 }
 
 .premium-loader-content {
