@@ -330,28 +330,48 @@ function App() {
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: idx * 0.05 }}
                       >
-                        <div className="sequence-card-topline">
-                          <div className={`sequence-status-pill ${zebra.is_new ? 'is-new' : 'is-match'}`}>
-                            {zebra.is_new ? 'New Profile' : 'Registry Match'}
+                        <div className="sequence-card-image-wrapper">
+                          {zebra.thumbnail_jpeg_base64 ? (
+                            <img 
+                              src={`data:image/jpeg;base64,${zebra.thumbnail_jpeg_base64}`} 
+                              alt={`Zebra ${zebra.zebra_id}`} 
+                              className="sequence-card-image"
+                            />
+                          ) : (
+                            <div className="sequence-card-image-placeholder">
+                              <Fingerprint size={32} opacity={0.2} />
+                            </div>
+                          )}
+                          <div className={`sequence-status-pill-floating ${zebra.is_new ? 'is-new' : 'is-match'}`}>
+                            {zebra.is_new ? 'New' : 'Match'}
                           </div>
-                          <button 
-                            className="copy-id-button sequence-copy-button"
-                            onClick={() => navigator.clipboard.writeText(zebra.zebra_id)}
-                            title="Copy ID"
-                            aria-label="Copy biometric ID"
-                          >
-                            <Copy size={16} strokeWidth={2.2} />
-                          </button>
                         </div>
-                        <div className="sequence-zebra-id">{zebra.zebra_id}</div>
-                        <div className="sequence-card-metrics">
-                          <div className="sequence-card-metric">
-                            <span>CONFIDENCE</span>
-                            <strong>{(zebra.confidence * 100).toFixed(1)}%</strong>
+
+                        <div className="sequence-card-content">
+                          <div className="sequence-card-topline">
+                            <div className="sequence-zebra-id-group">
+                              <span className="sequence-card-label">BIOMETRIC ID</span>
+                              <div className="sequence-zebra-id">{zebra.zebra_id}</div>
+                            </div>
+                            <button 
+                              className="copy-id-button sequence-copy-button"
+                              onClick={() => navigator.clipboard.writeText(zebra.zebra_id)}
+                              title="Copy ID"
+                              aria-label="Copy biometric ID"
+                            >
+                              <Copy size={16} strokeWidth={2.2} />
+                            </button>
                           </div>
-                          <div className="sequence-card-metric">
-                            <span>STATUS</span>
-                            <strong>{zebra.is_new ? 'ENROLLED' : 'SYNCED'}</strong>
+
+                          <div className="sequence-card-metrics">
+                            <div className="sequence-card-metric">
+                              <span>CONFIDENCE</span>
+                              <strong>{(zebra.confidence * 100).toFixed(1)}%</strong>
+                            </div>
+                            <div className="sequence-card-metric">
+                              <span>REGISTRY</span>
+                              <strong>{zebra.is_new ? 'ENROLLED' : 'VERIFIED'}</strong>
+                            </div>
                           </div>
                         </div>
                       </motion.div>
