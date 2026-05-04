@@ -227,15 +227,6 @@ function App() {
                     exit={{ opacity: 0 }}
                   >
                     <div className="premium-loader-content">
-                      <div className="premium-spinner">
-                        <svg viewBox="0 0 100 100">
-                          <circle cx="50" cy="50" r="45" stroke="#0f172a" strokeWidth="4" fill="none" className="spinner-circle" />
-                        </svg>
-                        <div className="spinner-icon" style={{ color: '#0f172a' }}>
-                          {isVideoFile ? <Video size={24} strokeWidth={1.5} /> : <Fingerprint size={24} strokeWidth={1.5} />}
-                        </div>
-                      </div>
-                      
                       <h3 className="premium-loading-title">
                         {isVideoFile ? 'Processing Video Feed' : 'Extracting Biometrics'}
                       </h3>
@@ -243,8 +234,8 @@ function App() {
                         {isVideoFile ? 'Detecting and matching zebra identities...' : 'Scanning stripe patterns against registry...'}
                       </p>
 
-                      {isVideoFile && videoJob && (
-                        <div className="premium-progress-container">
+                      <div className="premium-progress-container">
+                        {isVideoFile && videoJob ? (
                           <div className="premium-progress-stats">
                             <span className="premium-progress-percent">{videoProgressPercent}%</span>
                             <span className="premium-progress-frames">
@@ -253,16 +244,24 @@ function App() {
                               {videoJob.estimated_total_samples || '-'} frames
                             </span>
                           </div>
-                          <div className="premium-progress-track">
+                        ) : (
+                          <div className="premium-progress-stats" style={{ justifyContent: 'center' }}>
+                            <span className="premium-progress-frames" style={{ color: '#0f172a' }}>ANALYZING IMAGE</span>
+                          </div>
+                        )}
+                        <div className="premium-progress-track">
+                          {isVideoFile ? (
                             <div 
                               className="premium-progress-fill" 
                               style={{ width: `${videoProgressPercent}%` }}
                             >
                               <div className="premium-progress-glow"></div>
                             </div>
-                          </div>
+                          ) : (
+                            <div className="premium-progress-fill indeterminate"></div>
+                          )}
                         </div>
-                      )}
+                      </div>
                     </div>
                   </motion.div>
                 )}
