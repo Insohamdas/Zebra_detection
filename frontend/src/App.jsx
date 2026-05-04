@@ -417,6 +417,8 @@ function App() {
                   ? 'Input quality insufficient for biometric extraction. Please ensure the target is well-lit and in focus.' 
                   : error === 'no_zebra'
                   ? 'No target species detected in this capture. The system only processes individual zebra flanks.'
+                  : error === 'low_resolution'
+                  ? 'Image resolution is too low. Please provide an image with at least 0.5MP (e.g., 800x600 or higher).'
                   : error}
               </p>
               <button className="btn-primary" onClick={resetState}>

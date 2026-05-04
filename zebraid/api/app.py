@@ -177,7 +177,7 @@ def _identify_zebras_in_frame(
         ]
 
     _, engine, encoder, segmenter, flank_classifier, detector = get_pipeline()
-    zebra_boxes = detector.detect_boxes(frame)
+    zebra_boxes = detector.detect_boxes(frame, conf_threshold=0.3)
     if not zebra_boxes:
         return []
 
@@ -420,34 +420,55 @@ def get_pipeline():
     """Get or initialize the identification pipeline.
     
     Lazily initializes the pipeline on first request.
+    Ensures all components are properly initialized.
     """
     global _registry, _engine, _encoder, _segmenter, _flank_classifier, _detector
     
-    if _registry is None:
-        registry_path = os.getenv("REGISTRY_PATH", None)
-        _registry = FaissStore(embedding_dim=1138, store_path=registry_path)
-        _engine = MatchingEngine(
-            registry=_registry,
-            similarity_threshold=float(os.getenv("SIMILARITY_THRESHOLD", "0.75")),
-            review_similarity_threshold=float(os.getenv("REVIEW_SIMILARITY_THRESHOLD", "0.67")),
-            min_enroll_quality=_AUTO_ENROLL_MIN_QUALITY,
-        )
-        _encoder = FeatureEncoder()
-        _segmenter = ZebraSegmenter(backend="sam")
-        _flank_classifier = FlankClassifier()
-        from zebraid.preprocessing.detector import ZebraDetector
-        detector_model = os.getenv(
-            "DETECTOR_MODEL_PATH",
-            str(
-                Path(__file__).resolve().parents[2]
-                / "data"
-                / "runs"
-                / "zebra_combined_v1"
-                / "weights"
-                / "best.pt"
-            ),
-        )
-        _detector = ZebraDetector(model_name=detector_model)
+    if _registry is None or _engine is None or _encoder is None or _detector is None:
+        # Initialize Registry & Engine
+        if _registry is None:
+            registry_path = os.getenv("REGISTRY_PATH", None)
+            _registry = FaissStore(embedding_dim=1138, store_path=registry_path)
+            
+        if _engine is None:
+            _engine = MatchingEngine(
+                registry=_registry,
+                similarity_threshold=float(os.getenv("SIMILARITY_THRESHOLD", "0.75")),
+                review_similarity_threshold=float(os.getenv("REVIEW_SIMILARITY_THRESHOLD", "0.67")),
+                min_enroll_quality=_AUTO_ENROLL_MIN_QUALITY,
+            )
+            
+        # Initialize Encoder & Segmenter
+        if _encoder is None:
+            _encoder = FeatureEncoder()
+        if _segmenter is None:
+            _segmenter = ZebraSegmenter(backend="sam")
+        if _flank_classifier is None:
+            _flank_classifier = FlankClassifier()
+            
+        # Initialize Detector with fallback
+        if _detector is None:
+            from zebraid.preprocessing.detector import ZebraDetector
+            detector_model = os.getenv(
+                "DETECTOR_MODEL_PATH",
+                str(
+                    Path(__file__).resolve().parents[2]
+                    / "data"
+                    / "runs"
+                    / "zebra_combined_v1"
+                    / "weights"
+                    / "best.pt"
+                ),
+            )
+            
+            try:
+                if not os.path.exists(detector_model):
+                    LOGGER.warning(f"Custom detector model not found at {detector_model}. Falling back to yolov8n.pt")
+                    detector_model = "yolov8n.pt"
+                _detector = ZebraDetector(model_name=detector_model)
+            except Exception as e:
+                LOGGER.error(f"Failed to load detector {detector_model}: {e}. Trying absolute fallback.")
+                _detector = ZebraDetector(model_name="yolov8n.pt")
     
     return _registry, _engine, _encoder, _segmenter, _flank_classifier, _detector
 
@@ -520,14 +541,10 @@ def create_app() -> FastAPI:
             if ext and ext not in accepted_exts:
                 raise HTTPException(status_code=400, detail="unsupported_format")
 
-            # Resolution check (>= 5MP)
-            height, width = frame.shape[:2]
-            if (width * height) < 5_000_000:
-                raise HTTPException(status_code=422, detail="low_resolution")
-
             # Aspect-ratio sanity check (avoid extremely tall/flat images)
+            # widened to allow more flexibility
             aspect = float(width) / float(height) if height > 0 else 0.0
-            if aspect <= 0.0 or aspect < 0.5 or aspect > 2.0:
+            if aspect <= 0.0 or aspect < 0.1 or aspect > 10.0:
                 raise HTTPException(status_code=422, detail="bad_aspect_ratio")
 
             # Ensure color image (convert grayscale to BGR)

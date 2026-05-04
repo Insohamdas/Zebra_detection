@@ -13,11 +13,11 @@ import numpy as np
 class FramePrefilterConfig:
     """Thresholds for rejecting frames before the main identification pipeline."""
 
-    min_blur_variance: float = 80.0
-    min_side: int = 128
+    min_blur_variance: float = 30.0
+    min_side: int = 64
     overexposed_pixel_threshold: int = 245
-    max_overexposed_fraction: float = 0.35
-    model_reject_threshold: float = 0.6
+    max_overexposed_fraction: float = 0.5
+    model_reject_threshold: float = 0.8
 
 
 @dataclass(frozen=True, slots=True)
