@@ -229,16 +229,10 @@ function App() {
                     <div className="premium-loader-content">
                       <div className="premium-spinner">
                         <svg viewBox="0 0 100 100">
-                          <defs>
-                            <linearGradient id="spinner-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                              <stop offset="0%" stopColor="var(--primary)" />
-                              <stop offset="100%" stopColor="#10b981" />
-                            </linearGradient>
-                          </defs>
-                          <circle cx="50" cy="50" r="45" stroke="url(#spinner-gradient)" strokeWidth="6" fill="none" className="spinner-circle" />
+                          <circle cx="50" cy="50" r="45" stroke="#0f172a" strokeWidth="4" fill="none" className="spinner-circle" />
                         </svg>
-                        <div className="spinner-icon">
-                          {isVideoFile ? <Video size={24} /> : <Fingerprint size={24} />}
+                        <div className="spinner-icon" style={{ color: '#0f172a' }}>
+                          {isVideoFile ? <Video size={24} strokeWidth={1.5} /> : <Fingerprint size={24} strokeWidth={1.5} />}
                         </div>
                       </div>
                       
