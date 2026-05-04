@@ -447,23 +447,37 @@ function App() {
           ) : (
             <motion.div 
               key="error"
-              className="glass-card result-card"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              style={{ textAlign: 'center', maxWidth: '600px', margin: '0 auto' }}
+              className="single-result-card"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              style={{ display: 'flex', flexDirection: 'column', textAlign: 'center', maxWidth: '500px', margin: '0 auto', gap: '0' }}
             >
-              <AlertCircle size={64} color="var(--danger)" style={{ margin: '0 auto 1.5rem', opacity: 0.5 }} />
-              <h2 className="heading-xl" style={{ fontSize: '2.5rem' }}>Processing Aborted</h2>
-              <p style={{ color: 'var(--text-muted)', marginBottom: '2.5rem', fontSize: '1.1rem' }}>
-                {error === 'low_quality' 
-                  ? 'Input quality insufficient for biometric extraction. Please ensure the target is well-lit and in focus.' 
-                  : error === 'no_zebra'
-                  ? 'No target species detected in this capture. The system only processes individual zebra flanks.'
-                  : error === 'low_resolution'
-                  ? 'Image resolution is too low. Please provide an image with at least 0.5MP (e.g., 800x600 or higher).'
-                  : error}
+              <div style={{ background: 'rgba(239, 68, 68, 0.1)', padding: '1.25rem', borderRadius: '50%', marginBottom: '1.5rem', display: 'inline-flex' }}>
+                <AlertCircle size={40} color="#ef4444" strokeWidth={2.5} />
+              </div>
+              <h2 style={{ fontSize: '1.75rem', fontWeight: '700', color: '#0f172a', marginBottom: '1rem', fontFamily: 'var(--font-display)', letterSpacing: '-0.02em' }}>
+                Processing Aborted
+              </h2>
+              <p style={{ color: '#64748b', marginBottom: '2.5rem', fontSize: '1rem', lineHeight: '1.6' }}>
+                {(() => {
+                  const errorMap = {
+                    'low_quality': 'Input quality insufficient for biometric extraction. Please ensure the target is well-lit and in focus.',
+                    'no_zebra': 'No target species detected in this capture. The system only processes individual zebra flanks.',
+                    'low_resolution': 'Image resolution is too low. Please provide an image with at least 0.5MP.',
+                    'low_quality_or_no_zebra': 'The image quality is too low or no target species could be clearly detected. Please provide a clear, well-lit image.',
+                    'unsupported_format': 'Unsupported file format. Please upload a valid image or video file.'
+                  };
+                  if (errorMap[error]) return errorMap[error];
+                  
+                  const formatted = error.replace(/_/g, ' ');
+                  return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+                })()}
               </p>
-              <button className="btn-primary" onClick={resetState}>
+              <button 
+                className="btn-primary" 
+                onClick={resetState}
+                style={{ width: '100%', background: '#0f172a', color: 'white' }}
+              >
                 Re-submit Data
               </button>
             </motion.div>
