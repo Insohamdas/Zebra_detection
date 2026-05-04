@@ -1,6 +1,7 @@
 """YOLO-based object detector to filter out non-zebra images."""
 
 import logging
+import os
 import numpy as np
 from ultralytics import YOLO
 
@@ -9,7 +10,7 @@ LOGGER = logging.getLogger(__name__)
 class ZebraDetector:
     """Uses YOLOv8n to detect zebras in images."""
 
-    def __init__(self, model_name: str = "yolov8n.pt"):
+    def __init__(self, model_name: str = "yolov8n.pt", class_id: int | None = None):
         """Initialize the YOLO model.
         
         Args:
@@ -17,6 +18,8 @@ class ZebraDetector:
         """
         LOGGER.info(f"Loading YOLO detector: {model_name}")
         self.model = YOLO(model_name)
+        env_class_id = os.getenv("DETECTOR_CLASS_ID")
+        self.class_id = class_id if class_id is not None else (int(env_class_id) if env_class_id else None)
         
     def detect_boxes(self, image: np.ndarray, conf_threshold: float = 0.5) -> list[np.ndarray]:
         """Return zebra bounding boxes in ``[x1, y1, x2, y2]`` format.
@@ -37,9 +40,9 @@ class ZebraDetector:
                 for box in boxes:
                     cls_id = int(box.cls[0].item())
                     conf = box.conf[0].item()
-                    class_name = self.model.names[cls_id].lower()
-                    
-                    if class_name == "zebra" and conf >= conf_threshold:
+                    class_name = str(self.model.names[cls_id]).lower()
+                    zebra_match = (self.class_id == cls_id) if self.class_id is not None else (class_name == "zebra")
+                    if zebra_match and conf >= conf_threshold:
                         xyxy = box.xyxy[0].detach().cpu().numpy().astype(np.float32)
                         detections.append((float(conf), xyxy))
 

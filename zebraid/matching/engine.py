@@ -26,6 +26,8 @@ class MatchingEngine:
         similarity_threshold: float | None = None,
         distance_threshold: float | None = None,
         drift_hamming_threshold: float = 0.35,
+        review_similarity_threshold: float | None = None,
+        min_enroll_quality: float = 0.0,
     ):
         """Initialize matching engine with a registry store.
         
@@ -40,6 +42,10 @@ class MatchingEngine:
             similarity_threshold = float(distance_threshold)
         self.similarity_threshold = float(similarity_threshold)
         self.drift_hamming_threshold = drift_hamming_threshold
+        if review_similarity_threshold is None:
+            review_similarity_threshold = max(0.0, self.similarity_threshold - 0.08)
+        self.review_similarity_threshold = float(review_similarity_threshold)
+        self.min_enroll_quality = float(min_enroll_quality)
 
     @property
     def distance_threshold(self) -> float:
@@ -175,6 +181,15 @@ class MatchingEngine:
                     drift_threshold=self.drift_hamming_threshold,
                 )
                 is_new = False
+            elif cosine_sim >= self.review_similarity_threshold:
+                # Borderline similarity: keep existing ID and require downstream review,
+                # avoid creating noisy new identities.
+                is_new = False
+                drift_flag = False
+            elif quality_score is not None and quality_score < self.min_enroll_quality:
+                # Unmatched but low-quality crop: avoid auto-enrollment.
+                is_new = False
+                drift_flag = False
             else:
                 zebra_id = self._create_new_id(
                     embedding,

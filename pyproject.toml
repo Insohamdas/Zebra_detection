@@ -30,6 +30,8 @@ zebraid-api = "zebraid.api.app:main"
 zebraid-download-images = "zebraid.data.download:main"
 zebraid-test-video = "zebraid.pipelines.video_test:main"
 zebraid-evaluate = "zebraid.experiments.evaluate:main"
+zebraid-mine-hard = "scripts.hard_miner:run"
+zebraid-build-next-dataset = "scripts.build_next_dataset:main"
 
 [tool.setuptools.packages.find]
 include = ["zebraid*"]

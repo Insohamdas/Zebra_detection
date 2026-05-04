@@ -6,6 +6,7 @@ import logging
 import os
 import threading
 import tempfile
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -14,7 +15,7 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 from typing import Annotated
 
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from zebraid.feature_engine import (
@@ -25,6 +26,7 @@ from zebraid.feature_engine import (
 )
 from zebraid.matching import MatchingEngine
 from zebraid.registry import FaissStore
+from zebraid.registry.faiss_store import hamming_distance
 from zebraid.preprocessing import ZebraSegmenter, prepare_tensor
 from zebraid.id_generator import global_itq_code, local_patch_codes
 
@@ -47,10 +49,17 @@ class IdentificationResponse(BaseModel):
     is_new: bool
 
 
+class VideoIdentificationItem(IdentificationResponse):
+    """Per-zebra output item for video processing."""
+
+    thumbnail_jpeg_base64: str | None = None
+    flagged_for_review: bool = False
+
+
 class VideoIdentificationResponse(BaseModel):
     """Response from video identification endpoint."""
 
-    unique_zebras: list[IdentificationResponse]
+    unique_zebras: list[VideoIdentificationItem]
     total_frames_processed: int
 
 
@@ -66,7 +75,10 @@ class VideoJobStatusResponse(BaseModel):
 
     job_id: str
     status: str
-    unique_zebras: list[IdentificationResponse] | None = None
+    sampled_frames: int = 0
+    estimated_total_samples: int = 0
+    progress: float = 0.0
+    unique_zebras: list[VideoIdentificationItem] | None = None
     total_frames_processed: int | None = None
     error: str | None = None
 
@@ -74,14 +86,37 @@ class VideoJobStatusResponse(BaseModel):
 @dataclass
 class _VideoJobRecord:
     status: str
+    sampled_frames: int = 0
+    estimated_total_samples: int = 0
+    progress: float = 0.0
     result: VideoIdentificationResponse | None = None
     error: str | None = None
 
 
+@dataclass
+class _FrameIdentification:
+    """Internal payload for a single zebra detection in a frame."""
+
+    result: VideoIdentificationItem
+    global_code: np.ndarray | None
+    quality_score: float
+    thumbnail_bytes: bytes | None
+
+
 _VIDEO_JOBS: dict[str, _VideoJobRecord] = {}
 _VIDEO_JOBS_LOCK = threading.Lock()
-_VIDEO_SAMPLE_RATE = 15
-_VIDEO_MAX_SAMPLES = 100
+_VIDEO_SAMPLE_RATE = int(os.getenv("VIDEO_SAMPLE_RATE", "15"))
+_VIDEO_MAX_SAMPLES = int(os.getenv("VIDEO_MAX_SAMPLES", "100"))
+_REVIEW_CONFIDENCE_MIN = float(os.getenv("REVIEW_CONFIDENCE_MIN", "0.82"))
+_AUTO_ENROLL_MIN_QUALITY = float(os.getenv("AUTO_ENROLL_MIN_QUALITY", "0.70"))
+
+
+def _estimate_total_samples(frame_count: int, sample_rate: int, max_samples: int) -> int:
+    """Estimate how many frames will be sampled from a video."""
+
+    if frame_count <= 0:
+        return max_samples
+    return min(max_samples, (frame_count + sample_rate - 1) // sample_rate)
 
 
 def _mock_identification_from_frame(frame: np.ndarray) -> IdentificationResponse:
@@ -114,88 +149,156 @@ def _update_video_job(job_id: str, **updates: object) -> None:
             setattr(record, key, value)
 
 
-def _identify_frame_with_pipeline(
+def _identify_zebras_in_frame(
     frame: np.ndarray,
     *,
     frame_id: str,
     ref_image: bytes,
-) -> IdentificationResponse | None:
-    """Run the full zebra identification pipeline on a single frame."""
+) -> list[_FrameIdentification]:
+    """Run the full zebra identification pipeline on all detected zebras in a frame."""
 
     import cv2
     import torch
     from zebraid.pipelines.real_identify import prefilter_decision
 
     if os.getenv("IDENTIFY_MOCK", "") == "1":
-        return _mock_identification_from_frame(frame)
-
-    prefilter = prefilter_decision(frame)
-    if not prefilter.passed:
-        return None
-    qual_val = prefilter.score
+        mock_result = _mock_identification_from_frame(frame)
+        return [
+            _FrameIdentification(
+                result=VideoIdentificationItem(
+                    zebra_id=mock_result.zebra_id,
+                    confidence=mock_result.confidence,
+                    is_new=mock_result.is_new,
+                ),
+                global_code=None,
+                quality_score=1.0,
+                thumbnail_bytes=ref_image,
+            )
+        ]
 
     _, engine, encoder, segmenter, flank_classifier, detector = get_pipeline()
-
     zebra_boxes = detector.detect_boxes(frame)
     if not zebra_boxes:
-        return None
-    zebra_box = zebra_boxes[0]
+        return []
 
-    frame_tensor = prepare_tensor(frame, segmenter=segmenter, box=zebra_box)
+    frame_results: list[_FrameIdentification] = []
+    for det_idx, zebra_box in enumerate(zebra_boxes):
+        x1, y1, x2, y2 = [int(v) for v in zebra_box]
+        x1 = max(0, min(x1, frame.shape[1] - 1))
+        x2 = max(0, min(x2, frame.shape[1]))
+        y1 = max(0, min(y1, frame.shape[0] - 1))
+        y2 = max(0, min(y2, frame.shape[0]))
+        if x2 <= x1 or y2 <= y1:
+            continue
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            continue
 
-    with torch.no_grad():
-        if hasattr(encoder, "encode_multiscale"):
-            resnet_embedding = encoder.encode_multiscale(frame_tensor)
-        else:
-            resnet_embedding = encoder.encode(frame_tensor)
+        prefilter = prefilter_decision(crop)
+        if not prefilter.passed:
+            continue
+        qual_val = prefilter.score
 
-        engineered_feats = engineered_stripe_features(frame)
-        engineered_tensor = torch.from_numpy(engineered_feats).unsqueeze(0).to(resnet_embedding.device)
+        crop_ok, crop_buffer = cv2.imencode(".jpg", crop)
+        crop_bytes = crop_buffer.tobytes() if crop_ok else ref_image
+        frame_tensor = prepare_tensor(frame, segmenter=segmenter, box=zebra_box)
 
-        embedding = combine_features(resnet_embedding, [engineered_tensor], alpha=0.7)
-        global_code = global_itq_code(resnet_embedding.squeeze().detach().cpu().numpy())
-        zone_feats = engineered_feats[:96].reshape(3, 32)
-        patch_codes = local_patch_codes(
-            {
-                "shoulder": zone_feats[0],
-                "torso": zone_feats[1],
-                "neck": zone_feats[2],
-            }
+        with torch.no_grad():
+            if hasattr(encoder, "encode_multiscale"):
+                resnet_embedding = encoder.encode_multiscale(frame_tensor)
+            else:
+                resnet_embedding = encoder.encode(frame_tensor)
+
+            engineered_feats = engineered_stripe_features(crop)
+            engineered_tensor = (
+                torch.from_numpy(engineered_feats).unsqueeze(0).to(resnet_embedding.device)
+            )
+
+            embedding = combine_features(resnet_embedding, [engineered_tensor], alpha=0.7)
+            global_code = global_itq_code(resnet_embedding.squeeze().detach().cpu().numpy())
+            zone_feats = engineered_feats[:96].reshape(3, 32)
+            patch_codes = local_patch_codes(
+                {
+                    "shoulder": zone_feats[0],
+                    "torso": zone_feats[1],
+                    "neck": zone_feats[2],
+                }
+            )
+
+        embedding_np = embedding.squeeze().detach().cpu().numpy().astype(np.float32)
+        flank = flank_classifier.classify(crop)
+
+        zebra_id, confidence, is_new = engine.match_with_confidence(
+            embedding_np,
+            flank=flank,
+            frame_id=f"{frame_id}_det{det_idx}",
+            quality_score=qual_val,
+            ref_image=crop_bytes,
+            global_code=global_code,
+            local_codes={
+                "shoulder": patch_codes.shoulder,
+                "torso": patch_codes.torso,
+                "neck": patch_codes.neck,
+            },
+        )
+        frame_results.append(
+            _FrameIdentification(
+                result=VideoIdentificationItem(zebra_id=zebra_id, confidence=confidence, is_new=is_new),
+                global_code=np.asarray(global_code, dtype=np.uint8).ravel(),
+                quality_score=qual_val,
+                thumbnail_bytes=crop_bytes,
+            )
         )
 
-    embedding_np = embedding.squeeze().detach().cpu().numpy().astype(np.float32)
-    flank = flank_classifier.classify(frame)
+    return frame_results
 
-    zebra_id, confidence, is_new = engine.match_with_confidence(
-        embedding_np,
-        flank=flank,
-        frame_id=frame_id,
-        quality_score=qual_val,
-        ref_image=ref_image,
-        global_code=global_code,
-        local_codes={
-            "shoulder": patch_codes.shoulder,
-            "torso": patch_codes.torso,
-            "neck": patch_codes.neck,
-        },
+
+def _identify_frame_with_pipeline(
+    frame: np.ndarray,
+    *,
+    frame_id: str,
+    ref_image: bytes,
+) -> IdentificationResponse | None:
+    """Compatibility wrapper for single-image endpoint."""
+
+    frame_results = _identify_zebras_in_frame(frame, frame_id=frame_id, ref_image=ref_image)
+    if not frame_results:
+        return None
+    best = frame_results[0].result
+    return IdentificationResponse(
+        zebra_id=best.zebra_id,
+        confidence=best.confidence,
+        is_new=best.is_new,
     )
-
-    return IdentificationResponse(zebra_id=zebra_id, confidence=confidence, is_new=is_new)
 
 
 def _process_video_job(job_id: str, tmp_path: str, filename: str) -> None:
     import cv2
 
-    unique_ids: dict[str, IdentificationResponse] = {}
+    unique_ids: dict[str, _FrameIdentification] = {}
     frame_index = 0
     sampled_count = 0
     temp_path = Path(tmp_path)
+    cap = None
+    drift_threshold = 0.35
 
     try:
         _update_video_job(job_id, status="processing")
         cap = cv2.VideoCapture(tmp_path)
         if not cap.isOpened():
             raise RuntimeError("Could not open video file")
+
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        estimated_total_samples = _estimate_total_samples(
+            frame_count,
+            _VIDEO_SAMPLE_RATE,
+            _VIDEO_MAX_SAMPLES,
+        )
+        _update_video_job(
+            job_id,
+            estimated_total_samples=estimated_total_samples,
+            progress=0.0,
+        )
 
         while True:
             ret, frame = cap.read()
@@ -210,30 +313,75 @@ def _process_video_job(job_id: str, tmp_path: str, filename: str) -> None:
                 break
 
             sampled_count += 1
+            progress = (
+                min(sampled_count / estimated_total_samples, 1.0)
+                if estimated_total_samples
+                else 0.0
+            )
+            _update_video_job(
+                job_id,
+                sampled_frames=sampled_count,
+                progress=progress,
+            )
 
             encoded_ok, buffer = cv2.imencode(".jpg", frame)
             if not encoded_ok:
                 frame_index += 1
                 continue
 
-            result = _identify_frame_with_pipeline(
+            detections = _identify_zebras_in_frame(
                 frame,
                 frame_id=f"video_{filename}_{frame_index}",
                 ref_image=buffer.tobytes(),
             )
-            if result is not None:
-                existing = unique_ids.get(result.zebra_id)
-                if existing is None or result.confidence > existing.confidence:
-                    unique_ids[result.zebra_id] = result
+            for detection in detections:
+                zebra_id = detection.result.zebra_id
+                existing = unique_ids.get(zebra_id)
+                if (
+                    detection.result.confidence < _REVIEW_CONFIDENCE_MIN
+                    or detection.quality_score < _AUTO_ENROLL_MIN_QUALITY
+                ):
+                    detection.result.flagged_for_review = True
+                if (
+                    existing is not None
+                    and existing.global_code is not None
+                    and detection.global_code is not None
+                    and hamming_distance(existing.global_code, detection.global_code) > drift_threshold
+                ):
+                    existing.result.flagged_for_review = True
+                    detection.result.flagged_for_review = True
+
+                should_replace = (
+                    existing is None
+                    or detection.result.confidence > existing.result.confidence
+                    or (
+                        detection.result.confidence == existing.result.confidence
+                        and detection.quality_score > existing.quality_score
+                    )
+                )
+                if should_replace:
+                    if existing is not None and existing.result.flagged_for_review:
+                        detection.result.flagged_for_review = True
+                    unique_ids[zebra_id] = detection
 
             frame_index += 1
 
-        cap.release()
+        unique_results: list[IdentificationResponse] = []
+        for aggregate in unique_ids.values():
+            if aggregate.thumbnail_bytes:
+                aggregate.result.thumbnail_jpeg_base64 = base64.b64encode(
+                    aggregate.thumbnail_bytes
+                ).decode("ascii")
+            unique_results.append(aggregate.result)
+        unique_results.sort(key=lambda item: item.confidence, reverse=True)
+
         _update_video_job(
             job_id,
             status="completed",
+            sampled_frames=sampled_count,
+            progress=1.0,
             result=VideoIdentificationResponse(
-                unique_zebras=list(unique_ids.values()),
+                unique_zebras=unique_results,
                 total_frames_processed=sampled_count,
             ),
         )
@@ -241,10 +389,31 @@ def _process_video_job(job_id: str, tmp_path: str, filename: str) -> None:
         LOGGER.exception("Video processing failed")
         _update_video_job(job_id, status="failed", error=str(exc))
     finally:
+        if cap is not None:
+            cap.release()
         try:
             temp_path.unlink(missing_ok=True)
         except Exception:
             LOGGER.warning("Failed to remove temporary video file: %s", tmp_path)
+
+
+def _video_status_response(job_id: str) -> VideoJobStatusResponse:
+    """Build an API response for a video job record."""
+
+    record = _get_video_job(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="job_not_found")
+
+    return VideoJobStatusResponse(
+        job_id=job_id,
+        status=record.status,
+        sampled_frames=record.sampled_frames,
+        estimated_total_samples=record.estimated_total_samples,
+        progress=record.progress,
+        unique_zebras=(record.result.unique_zebras if record.result else None),
+        total_frames_processed=(record.result.total_frames_processed if record.result else None),
+        error=record.error,
+    )
 
 
 def get_pipeline():
@@ -257,12 +426,28 @@ def get_pipeline():
     if _registry is None:
         registry_path = os.getenv("REGISTRY_PATH", None)
         _registry = FaissStore(embedding_dim=1138, store_path=registry_path)
-        _engine = MatchingEngine(registry=_registry, similarity_threshold=0.75)
+        _engine = MatchingEngine(
+            registry=_registry,
+            similarity_threshold=float(os.getenv("SIMILARITY_THRESHOLD", "0.75")),
+            review_similarity_threshold=float(os.getenv("REVIEW_SIMILARITY_THRESHOLD", "0.67")),
+            min_enroll_quality=_AUTO_ENROLL_MIN_QUALITY,
+        )
         _encoder = FeatureEncoder()
         _segmenter = ZebraSegmenter(backend="sam")
         _flank_classifier = FlankClassifier()
         from zebraid.preprocessing.detector import ZebraDetector
-        _detector = ZebraDetector()
+        detector_model = os.getenv(
+            "DETECTOR_MODEL_PATH",
+            str(
+                Path(__file__).resolve().parents[2]
+                / "data"
+                / "runs"
+                / "zebra_combined_v1"
+                / "weights"
+                / "best.pt"
+            ),
+        )
+        _detector = ZebraDetector(model_name=detector_model)
     
     return _registry, _engine, _encoder, _segmenter, _flank_classifier, _detector
 
@@ -372,10 +557,10 @@ def create_app() -> FastAPI:
         status_code=202,
     )
     async def process_video(
+        background_tasks: BackgroundTasks,
         video: Annotated[UploadFile, File(description="Video file (MP4, AVI, MOV)")],
     ) -> VideoJobAcceptedResponse:
         """Queue a video file for zebra identification and return a job ID."""
-        import cv2
 
         # Save video to temp file
         suffix = os.path.splitext(video.filename or "")[1].lower()
@@ -390,15 +575,24 @@ def create_app() -> FastAPI:
             tmp_path = tmp.name
 
         _set_video_job(job_id, _VideoJobRecord(status="queued"))
-
-        worker = threading.Thread(
-            target=_process_video_job,
-            args=(job_id, tmp_path, video.filename or "upload"),
-            daemon=True,
+        background_tasks.add_task(
+            _process_video_job,
+            job_id,
+            tmp_path,
+            video.filename or "upload",
         )
-        worker.start()
 
         return VideoJobAcceptedResponse(job_id=job_id, status="queued")
+
+    @app.get(
+        "/video-status/{job_id}",
+        tags=["identification"],
+        response_model=VideoJobStatusResponse,
+    )
+    def get_video_status(job_id: str) -> VideoJobStatusResponse:
+        """Get the current status for a queued video job."""
+
+        return _video_status_response(job_id)
 
     @app.get(
         "/process-video/{job_id}",
@@ -408,17 +602,7 @@ def create_app() -> FastAPI:
     def get_process_video_job(job_id: str) -> VideoJobStatusResponse:
         """Get the current status for a queued video job."""
 
-        record = _get_video_job(job_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail="job_not_found")
-
-        return VideoJobStatusResponse(
-            job_id=job_id,
-            status=record.status,
-            unique_zebras=(record.result.unique_zebras if record.result else None),
-            total_frames_processed=(record.result.total_frames_processed if record.result else None),
-            error=record.error,
-        )
+        return _video_status_response(job_id)
 
     return app
 

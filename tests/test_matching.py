@@ -260,6 +260,50 @@ def test_temporal_drift_flag_on_hamming_change(engine):
     assert engine.registry.drift_flags["left"]["zebra_drift"] is True
 
 
+def test_match_with_confidence_review_band_avoids_new_enrollment(registry):
+    engine = MatchingEngine(
+        registry=registry,
+        similarity_threshold=0.75,
+        review_similarity_threshold=0.70,
+        min_enroll_quality=0.0,
+    )
+    base = np.array([1.0] + [0.0] * 159, dtype=np.float32)
+    borderline = np.array([0.72, np.sqrt(1.0 - 0.72**2)] + [0.0] * 158, dtype=np.float32)
+
+    engine.add_zebra(base, "zebra_anchor", flank="left")
+    before = engine.registry.indices["left"].ntotal
+    matched_id, _, is_new = engine.match_with_confidence(borderline, flank="left")
+    after = engine.registry.indices["left"].ntotal
+
+    assert matched_id == "zebra_anchor"
+    assert is_new is False
+    assert after == before
+
+
+def test_match_with_confidence_low_quality_avoids_new_enrollment(registry):
+    engine = MatchingEngine(
+        registry=registry,
+        similarity_threshold=0.75,
+        review_similarity_threshold=0.70,
+        min_enroll_quality=0.80,
+    )
+    base = np.array([1.0] + [0.0] * 159, dtype=np.float32)
+    far = np.array([-1.0] + [0.0] * 159, dtype=np.float32)
+
+    engine.add_zebra(base, "zebra_anchor", flank="left")
+    before = engine.registry.indices["left"].ntotal
+    matched_id, _, is_new = engine.match_with_confidence(
+        far,
+        flank="left",
+        quality_score=0.40,
+    )
+    after = engine.registry.indices["left"].ntotal
+
+    assert matched_id == "zebra_anchor"
+    assert is_new is False
+    assert after == before
+
+
 def test_resolve_three_phase_identity_enrolls_when_no_code_match(registry):
     engine = MatchingEngine(registry=registry, similarity_threshold=0.75)
     embedding = np.array([1.0, 0.0] + [0.0] * 158, dtype=np.float32)

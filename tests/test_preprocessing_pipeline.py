@@ -13,6 +13,7 @@ from zebraid.preprocessing.pipeline import (
 	prepare_tensor,
 	segment_and_clean,
 )
+from zebraid.preprocessing.detector import ZebraDetector
 
 
 def _sample_bgr_image() -> np.ndarray:
@@ -252,3 +253,131 @@ def test_load_hrnet_keypoint_detector_callable_path(monkeypatch) -> None:
 
 	# If a detector is available, it should be callable; exercise the callable contract with a dummy wrapper.
 	assert callable(detector)
+
+
+def test_zebra_detector_filters_non_zebra_and_low_confidence_boxes(monkeypatch) -> None:
+	class DummyTensor:
+		def __init__(self, value):
+			self._value = value
+
+		def item(self):
+			return self._value
+
+	class DummyArray:
+		def __init__(self, values):
+			self.values = np.asarray(values, dtype=np.float32)
+
+		def detach(self):
+			return self
+
+		def cpu(self):
+			return self
+
+		def numpy(self):
+			return self.values
+
+	class DummyBox:
+		def __init__(self, cls_id, conf, xyxy):
+			self.cls = np.array([cls_id], dtype=np.float32)
+			self.conf = np.array([conf], dtype=np.float32)
+			self.xyxy = [DummyArray(xyxy)]
+
+	class DummyResult:
+		def __init__(self, boxes):
+			self.boxes = boxes
+
+	class DummyYOLO:
+		names = {0: "zebra", 1: "person", 2: "zebra"}
+
+		def __call__(self, image, verbose=False):
+			return [
+				DummyResult(
+					[
+						DummyBox(0, 0.62, [10, 10, 60, 60]),
+						DummyBox(1, 0.99, [0, 0, 20, 20]),
+						DummyBox(2, 0.44, [5, 5, 25, 25]),
+					]
+				)
+			]
+
+	monkeypatch.setattr("zebraid.preprocessing.detector.YOLO", lambda model_name: DummyYOLO())
+	detector = ZebraDetector(model_name="dummy.pt")
+	image = np.zeros((128, 128, 3), dtype=np.uint8)
+
+	boxes = detector.detect_boxes(image)
+
+	assert len(boxes) == 1
+	assert np.allclose(boxes[0], np.array([10, 10, 60, 60], dtype=np.float32))
+
+
+def test_zebra_detector_quality_gates_flag_blur_small_crop_and_review() -> None:
+	detector = object.__new__(ZebraDetector)
+
+	# Provide one candidate box; the detector methods will run the quality gates on the crop.
+	detector.detect_boxes = lambda image, conf_threshold=0.5: [
+		np.array([0, 0, 96, 96], dtype=np.float32)
+	]
+
+	# Low-contrast, low-detail crop: blur should reject, entropy should be low, stripe contrast should flag review.
+	crop = np.full((96, 96, 3), 120, dtype=np.uint8)
+	image = crop.copy()
+
+	quality = detector.detect_with_quality(
+		image,
+		conf_threshold=0.5,
+		min_crop_size=128,
+		blur_threshold=80.0,
+		stripe_contrast_threshold=0.35,
+	)
+
+	assert len(quality) == 1
+	item = quality[0]
+	assert item["rejected"] is True
+	assert "small_crop" in item["reject_reasons"]
+	assert "blur" in item["reject_reasons"]
+	assert "low_entropy" in item["reject_reasons"]
+	assert item["quality"]["flag_review"] is True
+	assert item["quality"]["blur"] >= 0.0
+	assert item["quality"]["entropy"] >= 0.0
+	assert 0.0 <= item["quality"]["stripe_contrast"] <= 1.0
+
+
+def test_zebra_detector_uses_class_id_fallback(monkeypatch) -> None:
+	class DummyArray:
+		def __init__(self, values):
+			self.values = np.asarray(values, dtype=np.float32)
+
+		def detach(self):
+			return self
+
+		def cpu(self):
+			return self
+
+		def numpy(self):
+			return self.values
+
+	class DummyBox:
+		def __init__(self, cls_id, conf, xyxy):
+			self.cls = np.array([cls_id], dtype=np.float32)
+			self.conf = np.array([conf], dtype=np.float32)
+			self.xyxy = [DummyArray(xyxy)]
+
+	class DummyResult:
+		def __init__(self, boxes):
+			self.boxes = boxes
+
+	class DummyYOLO:
+		names = {0: "animal", 1: "vehicle"}
+
+		def __call__(self, image, verbose=False):
+			return [DummyResult([DummyBox(0, 0.90, [8, 8, 52, 52])])]
+
+	monkeypatch.setattr("zebraid.preprocessing.detector.YOLO", lambda model_name: DummyYOLO())
+	monkeypatch.setenv("DETECTOR_CLASS_ID", "0")
+	detector = ZebraDetector(model_name="dummy.pt")
+	image = np.zeros((64, 64, 3), dtype=np.uint8)
+
+	boxes = detector.detect_boxes(image)
+
+	assert len(boxes) == 1
+	assert np.allclose(boxes[0], np.array([8, 8, 52, 52], dtype=np.float32))

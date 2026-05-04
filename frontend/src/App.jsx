@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { 
   UploadCloud, 
   AlertCircle, 
@@ -18,7 +18,50 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [videoJob, setVideoJob] = useState(null);
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!videoJob?.job_id || videoJob.status === 'completed' || videoJob.status === 'failed') {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const pollVideoStatus = async () => {
+      try {
+        const response = await fetch(`${API_URL}/video-status/${videoJob.job_id}`);
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.detail || 'Video status unavailable');
+        }
+
+        const data = await response.json();
+        if (cancelled) return;
+
+        setVideoJob(data);
+        if (data.status === 'completed') {
+          setResult(data);
+          setLoading(false);
+        } else if (data.status === 'failed') {
+          setError(data.error || 'Video processing failed');
+          setLoading(false);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
+      }
+    };
+
+    pollVideoStatus();
+    const intervalId = window.setInterval(pollVideoStatus, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [API_URL, videoJob?.job_id, videoJob?.status]);
 
   const handleDragOver = (e) => {
     e.preventDefault();
@@ -50,6 +93,7 @@ function App() {
     setPreview(URL.createObjectURL(selectedFile));
     setError(null);
     setResult(null);
+    setVideoJob(null);
   };
 
   const handleUpload = async () => {
@@ -57,10 +101,12 @@ function App() {
 
     setLoading(true);
     setError(null);
+    setVideoJob(null);
 
     const isVideo = file.type.startsWith('video/');
     const endpoint = isVideo ? '/process-video' : '/identify';
     const fieldName = isVideo ? 'video' : 'image';
+    let shouldContinueVideoPolling = false;
 
     const formData = new FormData();
     formData.append(fieldName, file);
@@ -77,11 +123,24 @@ function App() {
       }
 
       const data = await response.json();
+      if (isVideo) {
+        shouldContinueVideoPolling = true;
+        setVideoJob({
+          ...data,
+          sampled_frames: 0,
+          estimated_total_samples: 0,
+          progress: 0,
+        });
+        return;
+      }
+
       setResult(data);
     } catch (err) {
       setError(err.message);
     } finally {
-      setLoading(false);
+      if (!shouldContinueVideoPolling) {
+        setLoading(false);
+      }
     }
   };
 
@@ -90,12 +149,14 @@ function App() {
     setPreview(null);
     setResult(null);
     setError(null);
+    setVideoJob(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
   const isVideoFile = file?.type.startsWith('video/');
+  const videoProgressPercent = Math.round((videoJob?.progress || 0) * 100);
 
   return (
     <div className="app-wrapper">
@@ -162,6 +223,24 @@ function App() {
                   <div className="loading-overlay">
                     <span className="loader"></span>
                     <p className="dropzone-title">{isVideoFile ? 'Analyzing Video Streams...' : 'Extracting Stripe Embeddings...'}</p>
+                    {isVideoFile && videoJob && (
+                      <div className="video-progress">
+                        <div className="video-progress-track" aria-hidden="true">
+                          <div
+                            className="video-progress-bar"
+                            style={{ width: `${videoProgressPercent}%` }}
+                          ></div>
+                        </div>
+                        <div className="video-progress-meta">
+                          <span>{videoProgressPercent}%</span>
+                          <span>
+                            {videoJob.sampled_frames || 0}
+                            {videoJob.estimated_total_samples ? ` / ${videoJob.estimated_total_samples}` : ''}
+                            {' '}samples
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
