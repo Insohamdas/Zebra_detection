@@ -589,8 +589,13 @@ def create_app() -> FastAPI:
 
         job_id = uuid4().hex
 
+        # Enforce maximum video size (e.g. 500 MB)
+        video_bytes = await video.read()
+        if len(video_bytes) > 500 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Video exceeds maximum allowed size (500MB).")
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix or ".mp4") as tmp:
-            tmp.write(await video.read())
+            tmp.write(video_bytes)
             tmp_path = tmp.name
 
         _set_video_job(job_id, _VideoJobRecord(status="queued"))

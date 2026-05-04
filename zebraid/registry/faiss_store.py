@@ -311,6 +311,9 @@ class PersistentFaissStore:
                 conn.commit()
             finally:
                 conn.close()
+        
+        # Ensure FAISS index is saved to disk
+        self.save()
     
     def update_embedding(
         self,
@@ -377,6 +380,9 @@ class PersistentFaissStore:
                 conn.commit()
             finally:
                 conn.close()
+        
+        # Ensure FAISS index is saved to disk
+        self.save()
         return drift_flag
     
     def add_and_get_id(

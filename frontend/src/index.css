@@ -557,21 +557,42 @@ button {
   width: min(100%, 760px);
   display: grid;
   grid-template-columns: minmax(190px, 0.9fr) minmax(0, 1.1fr);
-  gap: 2.25rem;
+  gap: 2.5rem;
   align-items: center;
-  background: white;
-  padding: 2.25rem;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 2.5rem;
   border-radius: var(--radius-2xl);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-xl);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(255, 255, 255, 0.5);
+  position: relative;
+  overflow: hidden;
+}
+
+.single-result-card::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 40%);
+  pointer-events: none;
 }
 
 .single-result-preview {
   position: relative;
   border-radius: var(--radius-xl);
   overflow: hidden;
-  border: 2px solid var(--border);
-  background: var(--surface-hover);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  background: var(--background);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.06);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.single-result-preview:hover {
+  transform: scale(1.02);
 }
 
 .single-result-preview img {
@@ -583,6 +604,8 @@ button {
 
 .single-result-details {
   min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .single-result-status {
