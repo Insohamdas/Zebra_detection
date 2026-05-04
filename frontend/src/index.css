@@ -828,63 +828,169 @@ button {
 }
 
 /* Loading Overlay */
-.loading-overlay {
+/* Premium Loading Overlay */
+.premium-loading-overlay {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(8px);
+  inset: 0;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  z-index: 10;
+  z-index: 20;
   border-radius: var(--radius-2xl);
+  border: 1px solid rgba(255, 255, 255, 0.4);
 }
 
-.loader {
-  width: 48px;
-  height: 48px;
-  border: 4px solid var(--border);
-  border-bottom-color: var(--primary);
-  border-radius: 50%;
-  display: inline-block;
-  box-sizing: border-box;
-  animation: rotation 1s linear infinite;
+.premium-loader-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 420px;
+  padding: 2rem;
+}
+
+.premium-spinner {
+  position: relative;
+  width: 90px;
+  height: 90px;
+  margin-bottom: 2rem;
+}
+
+.premium-spinner svg {
+  width: 100%;
+  height: 100%;
+  animation: premiumSpin 2s linear infinite;
+  filter: drop-shadow(0 4px 8px rgba(37, 99, 235, 0.2));
+}
+
+.spinner-circle {
+  stroke-dasharray: 200;
+  stroke-dashoffset: 0;
+  stroke-linecap: round;
+  animation: premiumDash 1.5s ease-in-out infinite;
+}
+
+.spinner-icon {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+  animation: premiumPulse 2s ease-in-out infinite;
+}
+
+.premium-loading-title {
+  font-size: 1.5rem;
+  font-family: var(--font-display);
+  color: var(--text-main);
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--text-main) 0%, var(--primary) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.premium-loading-subtitle {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.premium-progress-container {
+  width: 100%;
+  background: white;
+  padding: 1.5rem;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  border: 1px solid rgba(37, 99, 235, 0.1);
+}
+
+.premium-progress-stats {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
   margin-bottom: 1rem;
 }
 
-.video-progress {
-  width: min(100% - 3rem, 360px);
-  margin-top: 1rem;
+.premium-progress-percent {
+  font-size: 2.25rem;
+  font-weight: 800;
+  font-family: var(--font-display);
+  color: var(--text-main);
+  line-height: 1;
 }
 
-.video-progress-track {
-  width: 100%;
-  height: 10px;
-  overflow: hidden;
-  background: var(--border);
-  border-radius: var(--radius-md);
-}
-
-.video-progress-bar {
-  height: 100%;
-  min-width: 6px;
-  background: var(--primary);
-  border-radius: inherit;
-  transition: width 0.25s ease;
-}
-
-.video-progress-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-top: 0.65rem;
+.premium-progress-frames {
+  font-size: 0.85rem;
+  font-weight: 600;
   color: var(--text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.premium-progress-frames .highlight {
+  color: var(--primary);
+  font-weight: 800;
+  font-size: 1.1rem;
+}
+
+.premium-progress-frames .divider {
+  margin: 0 0.25rem;
+  opacity: 0.5;
+}
+
+.premium-progress-track {
+  width: 100%;
+  height: 12px;
+  background: var(--surface-hover);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.premium-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary) 0%, #10b981 100%);
+  border-radius: 999px;
+  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+
+.premium-progress-glow {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 20px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.8), transparent);
+  animation: shine 1.5s infinite;
+}
+
+@keyframes premiumSpin {
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes premiumDash {
+  0% { stroke-dasharray: 1, 280; stroke-dashoffset: 0; }
+  50% { stroke-dasharray: 180, 280; stroke-dashoffset: -40px; }
+  100% { stroke-dasharray: 180, 280; stroke-dashoffset: -280px; }
+}
+
+@keyframes premiumPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.9); opacity: 0.7; }
+}
+
+@keyframes shine {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400px); }
 }
 
 @keyframes rotation {

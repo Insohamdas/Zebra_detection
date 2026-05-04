@@ -220,28 +220,57 @@ function App() {
                 />
                 
                 {loading && (
-                  <div className="loading-overlay">
-                    <span className="loader"></span>
-                    <p className="dropzone-title">{isVideoFile ? 'Analyzing Video Streams...' : 'Extracting Stripe Embeddings...'}</p>
-                    {isVideoFile && videoJob && (
-                      <div className="video-progress">
-                        <div className="video-progress-track" aria-hidden="true">
-                          <div
-                            className="video-progress-bar"
-                            style={{ width: `${videoProgressPercent}%` }}
-                          ></div>
-                        </div>
-                        <div className="video-progress-meta">
-                          <span>{videoProgressPercent}%</span>
-                          <span>
-                            {videoJob.sampled_frames || 0}
-                            {videoJob.estimated_total_samples ? ` / ${videoJob.estimated_total_samples}` : ''}
-                            {' '}samples
-                          </span>
+                  <motion.div 
+                    className="premium-loading-overlay"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                  >
+                    <div className="premium-loader-content">
+                      <div className="premium-spinner">
+                        <svg viewBox="0 0 100 100">
+                          <defs>
+                            <linearGradient id="spinner-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                              <stop offset="0%" stopColor="var(--primary)" />
+                              <stop offset="100%" stopColor="#10b981" />
+                            </linearGradient>
+                          </defs>
+                          <circle cx="50" cy="50" r="45" stroke="url(#spinner-gradient)" strokeWidth="6" fill="none" className="spinner-circle" />
+                        </svg>
+                        <div className="spinner-icon">
+                          {isVideoFile ? <Video size={24} /> : <Fingerprint size={24} />}
                         </div>
                       </div>
-                    )}
-                  </div>
+                      
+                      <h3 className="premium-loading-title">
+                        {isVideoFile ? 'Processing Video Feed' : 'Extracting Biometrics'}
+                      </h3>
+                      <p className="premium-loading-subtitle">
+                        {isVideoFile ? 'Detecting and matching zebra identities...' : 'Scanning stripe patterns against registry...'}
+                      </p>
+
+                      {isVideoFile && videoJob && (
+                        <div className="premium-progress-container">
+                          <div className="premium-progress-stats">
+                            <span className="premium-progress-percent">{videoProgressPercent}%</span>
+                            <span className="premium-progress-frames">
+                              <span className="highlight">{videoJob.sampled_frames || 0}</span>
+                              <span className="divider">/</span>
+                              {videoJob.estimated_total_samples || '-'} frames
+                            </span>
+                          </div>
+                          <div className="premium-progress-track">
+                            <div 
+                              className="premium-progress-fill" 
+                              style={{ width: `${videoProgressPercent}%` }}
+                            >
+                              <div className="premium-progress-glow"></div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
                 )}
 
                 {!loading && !file && (
