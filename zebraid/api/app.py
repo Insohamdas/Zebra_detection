@@ -443,7 +443,7 @@ def get_pipeline():
         if _encoder is None:
             _encoder = FeatureEncoder()
         if _segmenter is None:
-            _segmenter = ZebraSegmenter(backend="sam")
+            _segmenter = ZebraSegmenter(backend="otsu")
         if _flank_classifier is None:
             _flank_classifier = FlankClassifier()
             
